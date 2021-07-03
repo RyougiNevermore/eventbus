@@ -7,8 +7,8 @@ import (
 	"github.com/aacfactory/errors"
 )
 
-func NewMessage(v interface{}) (msg *Message) {
-	msg = &Message{
+func newMessage(v interface{}) (msg *message) {
+	msg = &message{
 		Head: MultiMap{},
 		Body: nil,
 	}
@@ -19,8 +19,8 @@ func NewMessage(v interface{}) (msg *Message) {
 	return
 }
 
-func newFailedMessage(err error) (msg *Message) {
-	msg = &Message{
+func newFailedMessage(err error) (msg *message) {
+	msg = &message{
 		Head: MultiMap{},
 		Body: nil,
 	}
@@ -33,33 +33,33 @@ func newFailedMessage(err error) (msg *Message) {
 	return
 }
 
-type Message struct {
+type message struct {
 	Head MultiMap        `json:"header,omitempty"`
 	Body json.RawMessage `json:"body,omitempty"`
 }
 
-func (msg *Message) putAddress(address string) {
+func (msg *message) putAddress(address string) {
 	msg.Head.Add(messageHeadAddress, address)
 }
 
-func (msg *Message) getAddress() (string, bool) {
+func (msg *message) getAddress() (string, bool) {
 	return msg.Head.Get(messageHeadAddress)
 }
 
-func (msg *Message) putReplyAddress(address string) {
+func (msg *message) putReplyAddress(address string) {
 	msg.Head.Add(messageHeadReplyAddress, address)
 }
 
-func (msg *Message) getReplyAddress() (string, bool) {
+func (msg *message) getReplyAddress() (string, bool) {
 	return msg.Head.Get(messageHeadReplyAddress)
 }
 
-func (msg *Message) failed() (failed bool) {
+func (msg *message) failed() (failed bool) {
 	_, failed = msg.Head.Get(messageHeadReplyErrorCause)
 	return
 }
 
-func (msg *Message) cause() (err error) {
+func (msg *message) cause() (err error) {
 	if !msg.failed() {
 		return
 	}
@@ -72,23 +72,25 @@ func (msg *Message) cause() (err error) {
 	return
 }
 
+type DeliveryOptions MultiMap
+
 type Eventbus interface {
-	Send(context context.Context, address string, msg Message) (err error)
-	Request(context context.Context, address string, msg Message) (reply *ReplyFuture)
-	Handle(context context.Context, address string, handler EventHandler) (err error)
+	Send(address string, v interface{}, options ...DeliveryOptions) (err error)
+	Request(address string, v interface{}, options ...DeliveryOptions) (reply *ReplyFuture)
+	RegisterHandler(address string, handler EventHandler) (err error)
 	Close(context context.Context)
 }
 
-type EventHandler func(context context.Context, msg *Message) (result interface{}, err error)
+type EventHandler func(context context.Context, msg *message) (result interface{}, err error)
 
-func newFuture(ch <-chan *Message) *ReplyFuture {
+func newFuture(ch <-chan *message) *ReplyFuture {
 	return &ReplyFuture{
 		ch: ch,
 	}
 }
 
 func newFailedFuture(err error) *ReplyFuture {
-	ch := make(chan *Message, 1)
+	ch := make(chan *message, 1)
 	ch <- newFailedMessage(err)
 	close(ch)
 	return &ReplyFuture{
@@ -97,7 +99,7 @@ func newFailedFuture(err error) *ReplyFuture {
 }
 
 type ReplyFuture struct {
-	ch <-chan *Message
+	ch <-chan *message
 }
 
 func (r *ReplyFuture) Result(v interface{}) (err error) {

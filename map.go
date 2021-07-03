@@ -43,3 +43,21 @@ func (h MultiMap) Keys() []string {
 func (h MultiMap) Empty() bool {
 	return h == nil || len(h) == 0
 }
+
+func (h MultiMap) Merge(o ...MultiMap) {
+	if o == nil || len(o) == 0 {
+		return
+	}
+	for _, other := range o {
+		for k, v := range other {
+			ov, _ := h.Values(k)
+			if ov == nil {
+				ov = make([]string, 0, 1)
+			}
+			for i := 0; i < len(v); i++ {
+				ov = append(ov, v[i])
+			}
+			h.Put(k, ov)
+		}
+	}
+}
