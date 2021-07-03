@@ -108,6 +108,9 @@ func (r *ReplyFuture) Result(v interface{}) (err error) {
 		err = msg.cause()
 		return
 	}
-	jsonDecode(msg.Body, v)
+	if (msg.Body == nil || len(msg.Body) == 0) && v != nil {
+		err = errors.ServiceError("eventbus get reply failed, result is nil")
+	}
+	err = jsonAPI().Unmarshal(msg.Body, v)
 	return
 }
