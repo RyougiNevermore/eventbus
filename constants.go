@@ -1,8 +1,7 @@
 package eventbus
 
 const (
-
-	messageHeadAddress      = "address"
-	messageHeadReplyAddress = "replyAddress"
-
+	messageHeadAddress      = "__address"
+	messageHeadReplyAddress = "__replyAddress"
+	messageHeadReplyErrorCause = "__replyErrorCause"
 )

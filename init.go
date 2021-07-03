@@ -1,7 +1,11 @@
 package eventbus
 
-func init()  {
-	// json
-	initJsonApi()
+import "sync"
 
+var _once = new(sync.Once)
+
+func init() {
+	_once.Do(func() {
+		initJsonApi()
+	})
 }
