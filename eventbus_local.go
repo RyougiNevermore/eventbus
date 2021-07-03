@@ -27,7 +27,7 @@ func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 
 	eb = &localedEventbus{
 		running:                    int64(1),
-		lock:                       new(sync.Mutex),
+		lock:                       new(sync.RWMutex),
 		inbound:                    make(chan *message, eventChanCap),
 		outbounds:                  make(map[string]chan *message),
 		handlers:                   make(map[string]EventHandler),
@@ -47,7 +47,7 @@ type LocaledEventbusOption struct {
 
 type localedEventbus struct {
 	running                    int64
-	lock                       *sync.Mutex
+	lock                       *sync.RWMutex
 	inbound                    chan *message
 	outbounds                  map[string]chan *message // key is reply address
 	handlers                   map[string]EventHandler  // key is address
@@ -70,7 +70,7 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 	_msg := newMessage(v)
 	if options != nil && len(options) > 0 {
 		for _, option := range options {
-			_msg.Head.Merge(MultiMap(option))
+			_msg.Head.Merge(option.MultiMap)
 		}
 	}
 	_msg.putAddress(address)
@@ -100,7 +100,7 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 	_msg := newMessage(v)
 	if options != nil && len(options) > 0 {
 		for _, option := range options {
-			_msg.Head.Merge(MultiMap(option))
+			_msg.Head.Merge(option.MultiMap)
 		}
 	}
 	_msg.putAddress(address)
@@ -181,6 +181,8 @@ func (eb *localedEventbus) closed() bool {
 }
 
 func (eb *localedEventbus) addressExisted(address string) (err error) {
+	eb.lock.RLock()
+	defer eb.lock.RUnlock()
 	_, has := eb.handlers[address]
 	if !has {
 		err = errors.ServiceError(fmt.Sprintf("event handler for address[%s] is not bound", address))
@@ -200,12 +202,14 @@ func (eb *localedEventbus) listen() {
 				if !has || address == "" {
 					panic(fmt.Errorf("eventbus handle event failed, address is empty, %v", msg))
 				}
+				eb.lock.RLock()
 				handler, existed := eb.handlers[address]
+				eb.lock.RUnlock()
 				if !existed {
 					panic(fmt.Errorf("eventbus handle event failed, no handler handle address %s, %v", address, msg))
 
 				}
-				reply, handleErr := handler(context.TODO(), msg)
+				reply, handleErr := handler(msg.Head, msg.Body)
 
 				replyAddress, needReply := msg.getReplyAddress()
 				if needReply {

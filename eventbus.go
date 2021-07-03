@@ -72,7 +72,15 @@ func (msg *message) cause() (err error) {
 	return
 }
 
-type DeliveryOptions MultiMap
+func NewDeliveryOptions() DeliveryOptions {
+	return DeliveryOptions{
+		MultiMap{},
+	}
+}
+
+type DeliveryOptions struct {
+	MultiMap
+}
 
 type Eventbus interface {
 	Send(address string, v interface{}, options ...DeliveryOptions) (err error)
@@ -81,7 +89,7 @@ type Eventbus interface {
 	Close(context context.Context)
 }
 
-type EventHandler func(context context.Context, msg *message) (result interface{}, err error)
+type EventHandler func(head MultiMap, body []byte) (result interface{}, err error)
 
 func newFuture(ch <-chan *message) *ReplyFuture {
 	return &ReplyFuture{
