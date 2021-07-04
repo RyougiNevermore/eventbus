@@ -1,5 +1,5 @@
-github.com/aacfactory/errors v1.1.0 h1:UJt7Xg55HCQooZU64UHhJN6EZT6bHBLSjA+L3g2Xem0=
-github.com/aacfactory/errors v1.1.0/go.mod h1:0QnexOPAmLIGVFkV/zWbKdnPQejdM8qlz6hpqwX9wZQ=
+github.com/aacfactory/errors v1.1.1 h1:NwNx7O4LlXzkHpMcY8uBoiq0vIGgeZTovlNXPgPulBM=
+github.com/aacfactory/errors v1.1.1/go.mod h1:s62BCMwVb4QbkALH1ima6moixnzaXX927qwocfvm5HA=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
