@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"github.com/aacfactory/errors"
-	"github.com/rs/xid"
 	"runtime"
 	"sync"
 	"sync/atomic"
+)
+
+const (
+	localEventbusReplyAddress = "local"
 )
 
 func NewEventbus() Eventbus {
@@ -26,18 +29,21 @@ func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 	}
 
 	eb = &localedEventbus{
-		running:                    int64(1),
-		lock:                       new(sync.RWMutex),
-		inbound:                    make(chan *message, eventChanCap),
-		outbounds:                  make(map[string]chan *message),
+		running:                    int64(0),
+		lock:                       new(sync.Mutex),
+		requestCh:                  make(chan *RequestMessage, eventChanCap),
 		handlers:                   make(map[string]EventHandler),
 		handleCount:                new(sync.WaitGroup),
 		eventChanCap:               eventChanCap,
 		eventHandlerInstanceNumber: eventHandlerInstanceNumber,
 	}
 
-	eb.listen()
 	return
+}
+
+type RequestMessage struct {
+	message *message
+	replyCh chan<- *message
 }
 
 type LocaledEventbusOption struct {
@@ -47,10 +53,9 @@ type LocaledEventbusOption struct {
 
 type localedEventbus struct {
 	running                    int64
-	lock                       *sync.RWMutex
-	inbound                    chan *message
-	outbounds                  map[string]chan *message // key is reply address
-	handlers                   map[string]EventHandler  // key is address
+	lock                       *sync.Mutex
+	requestCh                  chan *RequestMessage
+	handlers                   map[string]EventHandler // key is address
 	eventChanCap               int
 	eventHandlerInstanceNumber int
 	handleCount                *sync.WaitGroup
@@ -67,20 +72,17 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 		return
 	}
 
-	_msg := newMessage(v)
-	if options != nil && len(options) > 0 {
-		for _, option := range options {
-			_msg.Head.Merge(option.MultiMap)
-		}
-	}
-	_msg.putAddress(address)
+	msg := newMessage(address, noReplyAddress, v, options)
 
 	if eb.closed() {
 		err = errors.ServiceError("eventbus send failed, eventbus has been closed")
 		return
 	}
 
-	eb.inbound <- _msg
+	eb.requestCh <- &RequestMessage{
+		message: msg,
+		replyCh: nil,
+	}
 	eb.handleCount.Add(1)
 
 	return
@@ -97,36 +99,31 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 		return
 	}
 
-	_msg := newMessage(v)
-	if options != nil && len(options) > 0 {
-		for _, option := range options {
-			_msg.Head.Merge(option.MultiMap)
-		}
-	}
-	_msg.putAddress(address)
-	replyAddress := fmt.Sprintf("%s:%s", address, xid.New().String())
-	_msg.putReplyAddress(replyAddress)
+	msg := newMessage(address, localEventbusReplyAddress, v, options)
+
+	replyCh := make(chan *message, 1)
+	reply = newFuture(replyCh)
 
 	if eb.closed() {
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, eventbus has been closed"))
 		return
 	}
 
-	eb.inbound <- _msg
+	eb.requestCh <- &RequestMessage{
+		message: msg,
+		replyCh: replyCh,
+	}
 	eb.handleCount.Add(1)
-
-	replyCh := make(chan *message, 1)
-
-	eb.lock.Lock()
-	eb.outbounds[replyAddress] = replyCh
-	eb.lock.Unlock()
-
-	reply = newFuture(replyCh)
 
 	return
 }
 
 func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler) (err error) {
+	if !eb.closed() {
+		err = fmt.Errorf("eventbus register handler failed, it is running")
+		return
+	}
+
 	eb.lock.Lock()
 	defer eb.lock.Unlock()
 
@@ -149,6 +146,14 @@ func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler)
 	return
 }
 
+func (eb *localedEventbus) Start(context context.Context) {
+	if !eb.closed() {
+		panic(fmt.Errorf("eventbus start failed, it is running"))
+	}
+	atomic.StoreInt64(&eb.running, int64(1))
+	eb.listen()
+}
+
 func (eb *localedEventbus) Close(context context.Context) {
 	if eb.closed() {
 		panic(fmt.Errorf("eventbus has been closed, close falied"))
@@ -157,7 +162,7 @@ func (eb *localedEventbus) Close(context context.Context) {
 		panic(fmt.Errorf("eventbus is not running, close failed"))
 	}
 
-	close(eb.inbound)
+	close(eb.requestCh)
 
 	closeCh := make(chan struct{}, 1)
 
@@ -181,8 +186,6 @@ func (eb *localedEventbus) closed() bool {
 }
 
 func (eb *localedEventbus) addressExisted(address string) (err error) {
-	eb.lock.RLock()
-	defer eb.lock.RUnlock()
 	_, has := eb.handlers[address]
 	if !has {
 		err = errors.ServiceError(fmt.Sprintf("event handler for address[%s] is not bound", address))
@@ -194,34 +197,33 @@ func (eb *localedEventbus) listen() {
 	for i := 0; i < eb.eventHandlerInstanceNumber; i++ {
 		go func(eb *localedEventbus) {
 			for {
-				msg, ok := <-eb.inbound
+				requestMessage, ok := <-eb.requestCh
 				if !ok {
 					break
 				}
+				msg := requestMessage.message
 				address, has := msg.getAddress()
 				if !has || address == "" {
 					panic(fmt.Errorf("eventbus handle event failed, address is empty, %v", msg))
 				}
-				eb.lock.RLock()
 				handler, existed := eb.handlers[address]
-				eb.lock.RUnlock()
 				if !existed {
 					panic(fmt.Errorf("eventbus handle event failed, no handler handle address %s, %v", address, msg))
 
 				}
 				reply, handleErr := handler(msg.Head, msg.Body)
 
-				replyAddress, needReply := msg.getReplyAddress()
+				_, needReply := msg.getReplyAddress()
 				if needReply {
-					eb.lock.Lock()
-					replyCh := eb.outbounds[replyAddress]
-					delete(eb.outbounds, replyAddress)
-					eb.lock.Unlock()
+					replyCh := requestMessage.replyCh
+					if replyCh == nil {
+						panic(fmt.Errorf("eventbus handle event failed, need reply but not was called by request, %v", msg))
+					}
 					var replyMsg *message
 					if handleErr != nil {
-						replyMsg = newFailedMessage(handleErr)
+						replyMsg = failedReplyMessage(handleErr)
 					} else {
-						replyMsg = newMessage(reply)
+						replyMsg = succeedReplyMessage(reply)
 					}
 					replyCh <- replyMsg
 					close(replyCh)

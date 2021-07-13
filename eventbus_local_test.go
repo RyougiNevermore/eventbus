@@ -47,6 +47,8 @@ func TestNewEventbus(t *testing.T) {
 	_ = eb.RegisterHandler("void", HandlerVoid)
 	_ = eb.RegisterHandler("reply", HandlerReply)
 
+	eb.Start(context.TODO())
+
 	options := eventbus.NewDeliveryOptions()
 	options.Add("h1", "1")
 	options.Add("h2", "2")

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+option go_package = "github.com/aacfactory/eventbus/internal";
+
+package internal;
+
+message Void {
+
+}
+
+message Message {
+  bytes header = 1;
+  bytes body = 2;
+}
+
+service Eventbus {
+  rpc Send (Message) returns (Void) {}
+  rpc Request (Message) returns (Message) {}
+}

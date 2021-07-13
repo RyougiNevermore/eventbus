@@ -7,7 +7,11 @@ import (
 	"github.com/aacfactory/errors"
 )
 
-func newMessage(v interface{}) (msg *message) {
+const (
+	noReplyAddress = ""
+)
+
+func newMessage(address string, replyAddress string, v interface{}, options []DeliveryOptions) (msg *message) {
 	msg = &message{
 		Head: MultiMap{},
 		Body: nil,
@@ -16,10 +20,19 @@ func newMessage(v interface{}) (msg *message) {
 		return msg
 	}
 	msg.Body = jsonEncode(v)
+	if options != nil && len(options) > 0 {
+		for _, option := range options {
+			msg.Head.Merge(option.MultiMap)
+		}
+	}
+	msg.putAddress(address)
+	if replyAddress != noReplyAddress {
+		msg.putReplyAddress(replyAddress)
+	}
 	return
 }
 
-func newFailedMessage(err error) (msg *message) {
+func failedReplyMessage(err error) (msg *message) {
 	msg = &message{
 		Head: MultiMap{},
 		Body: nil,
@@ -30,6 +43,18 @@ func newFailedMessage(err error) (msg *message) {
 	}
 	msg.Head.Add(messageHeadReplyErrorCause, "true")
 	msg.Body = codeErr.ToJson()
+	return
+}
+
+func succeedReplyMessage(v interface{}) (msg *message) {
+	msg = &message{
+		Head: MultiMap{},
+		Body: nil,
+	}
+	if v == nil {
+		return msg
+	}
+	msg.Body = jsonEncode(v)
 	return
 }
 
@@ -86,6 +111,7 @@ type Eventbus interface {
 	Send(address string, v interface{}, options ...DeliveryOptions) (err error)
 	Request(address string, v interface{}, options ...DeliveryOptions) (reply *ReplyFuture)
 	RegisterHandler(address string, handler EventHandler) (err error)
+	Start(context context.Context)
 	Close(context context.Context)
 }
 
@@ -99,7 +125,7 @@ func newFuture(ch <-chan *message) *ReplyFuture {
 
 func newFailedFuture(err error) *ReplyFuture {
 	ch := make(chan *message, 1)
-	ch <- newFailedMessage(err)
+	ch <- failedReplyMessage(err)
 	close(ch)
 	return &ReplyFuture{
 		ch: ch,
