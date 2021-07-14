@@ -11,7 +11,10 @@ const (
 	noReplyAddress = ""
 )
 
-func newMessage(address string, replyAddress string, v interface{}, options []DeliveryOptions) (msg *message) {
+func newMessage(address string, v interface{}, options []DeliveryOptions) (msg *message) {
+	if address == "" {
+		panic(fmt.Errorf("eventbus create message failed, address is empty"))
+	}
 	msg = &message{
 		Head: MultiMap{},
 		Body: nil,
@@ -26,9 +29,6 @@ func newMessage(address string, replyAddress string, v interface{}, options []De
 		}
 	}
 	msg.putAddress(address)
-	if replyAddress != noReplyAddress {
-		msg.putReplyAddress(replyAddress)
-	}
 	return
 }
 
@@ -41,7 +41,7 @@ func failedReplyMessage(err error) (msg *message) {
 	if !transferred {
 		codeErr = newReplyErr(err)
 	}
-	msg.Head.Add(messageHeadReplyErrorCause, "true")
+	msg.Head.Add(messageHeadReplyError, "true")
 	msg.Body = codeErr.ToJson()
 	return
 }
@@ -71,16 +71,9 @@ func (msg *message) getAddress() (string, bool) {
 	return msg.Head.Get(messageHeadAddress)
 }
 
-func (msg *message) putReplyAddress(address string) {
-	msg.Head.Add(messageHeadReplyAddress, address)
-}
-
-func (msg *message) getReplyAddress() (string, bool) {
-	return msg.Head.Get(messageHeadReplyAddress)
-}
 
 func (msg *message) failed() (failed bool) {
-	_, failed = msg.Head.Get(messageHeadReplyErrorCause)
+	_, failed = msg.Head.Get(messageHeadReplyError)
 	return
 }
 

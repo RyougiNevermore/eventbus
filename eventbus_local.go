@@ -9,10 +9,6 @@ import (
 	"sync/atomic"
 )
 
-const (
-	localEventbusReplyAddress = "local"
-)
-
 func NewEventbus() Eventbus {
 	return NewEventbusWithOption(LocaledEventbusOption{EventChanCap: runtime.NumCPU() * 64, EventHandlerInstanceNumber: runtime.NumCPU() * 2})
 }
@@ -72,7 +68,7 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 		return
 	}
 
-	msg := newMessage(address, noReplyAddress, v, options)
+	msg := newMessage(address, v, options)
 
 	if eb.closed() {
 		err = errors.ServiceError("eventbus send failed, eventbus has been closed")
@@ -99,7 +95,7 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 		return
 	}
 
-	msg := newMessage(address, localEventbusReplyAddress, v, options)
+	msg := newMessage(address, v, options)
 
 	replyCh := make(chan *message, 1)
 	reply = newFuture(replyCh)
@@ -212,13 +208,8 @@ func (eb *localedEventbus) listen() {
 
 				}
 				reply, handleErr := handler(msg.Head, msg.Body)
-
-				_, needReply := msg.getReplyAddress()
-				if needReply {
-					replyCh := requestMessage.replyCh
-					if replyCh == nil {
-						panic(fmt.Errorf("eventbus handle event failed, need reply but not was called by request, %v", msg))
-					}
+				replyCh := requestMessage.replyCh
+				if replyCh != nil {
 					var replyMsg *message
 					if handleErr != nil {
 						replyMsg = failedReplyMessage(handleErr)
@@ -228,7 +219,6 @@ func (eb *localedEventbus) listen() {
 					replyCh <- replyMsg
 					close(replyCh)
 				}
-
 				eb.handleCount.Done()
 			}
 		}(eb)

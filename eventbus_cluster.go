@@ -10,8 +10,7 @@ import (
 )
 
 const (
-	defaultGroupName      = "eventbus"
-	defaultReplyGroupName = "eventbus_reply"
+	defaultGroupName      = "_ebs"
 )
 
 type ClusterEventbusOption struct {
@@ -30,6 +29,7 @@ type clusterEventBus struct {
 	running                    int64
 	ln                         *net.TCPListener
 	discovery                  ServiceDiscovery
+	enableLocal                bool
 	inbound                    chan *message
 	outboundsLock              *sync.Mutex
 	outbounds                  map[string]chan *message // key is reply address
@@ -79,7 +79,7 @@ func (bus *clusterEventBus) Send(address string, v interface{}, options ...Deliv
 		err = fmt.Errorf("eventbus send failed, %s was not found", address)
 		return
 	}
-	msg := newMessage(address, noReplyAddress, v, options)
+	msg := newMessage(address, v, options)
 
 	_, sendToRemoteErr := bus.sendToDiscovered(registration, msg)
 	if sendToRemoteErr != nil {
@@ -119,7 +119,7 @@ func (bus *clusterEventBus) Request(address string, v interface{}, options ...De
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, %s was not found", address))
 		return
 	}
-	msg := newMessage(address, bus.replyAddress(), v, options)
+	msg := newMessage(address, v, options)
 
 	reply0, sendToRemoteErr := bus.sendToDiscovered(registration, msg)
 	if sendToRemoteErr != nil {
