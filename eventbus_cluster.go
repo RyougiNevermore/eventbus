@@ -2,9 +2,11 @@ package eventbus
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"github.com/aacfactory/errors"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,114 @@ type ClusterEventbusOption struct {
 	TLS                        *EndpointTLS  `json:"tls,omitempty"`
 	EventChanCap               int           `json:"eventChanCap,omitempty"`
 	EventHandlerInstanceNumber int           `json:"eventHandlerInstanceNumber,omitempty"`
+	EnableLocal                bool          `json:"enableLocal,omitempty"`
+}
+
+func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption) (bus Eventbus, err error) {
+	if discovery == nil {
+		err = fmt.Errorf("create cluster eventbus failed, dicovery is nil")
+		return
+	}
+
+	eventChanCap := option.EventChanCap
+	if eventChanCap < 1 {
+		eventChanCap = runtime.NumCPU() * 64
+	}
+	eventHandlerInstanceNumber := option.EventHandlerInstanceNumber
+	if eventHandlerInstanceNumber < 1 {
+		eventHandlerInstanceNumber = runtime.NumCPU() * 2
+	}
+
+	clusterEventbus := &clusterEventBus{
+		running:                    0,
+		ln:                         nil,
+		grpcServer:                 nil,
+		discovery:                  discovery,
+		clients:                    nil,
+		requestMessageDispatcher:   make(chan *requestMessage, eventChanCap),
+		handlersLock:               new(sync.Mutex),
+		eventHandlerInstanceNumber: eventHandlerInstanceNumber,
+		handlers:                   make(map[string]EventHandler),
+		handleCount:                new(sync.WaitGroup),
+		registrationAddress:        "",
+		meta:                       option.Meta,
+		endpointTLS:                option.TLS,
+		registrations:              make([]Registration, 0, 1),
+		enableLocal:                option.EnableLocal,
+		localed:                    nil,
+	}
+
+	if option.EnableLocal {
+		localed := NewEventbusWithOption(LocaledEventbusOption{
+			EventChanCap:               eventChanCap,
+			EventHandlerInstanceNumber: eventHandlerInstanceNumber,
+		})
+		clusterEventbus.localed = localed
+	}
+
+	host := option.Host
+	if host == "" {
+		err = fmt.Errorf("create cluster eventbus failed, host is empty")
+		return
+	}
+	port := option.Port
+	if port < 1 || port > 65535 {
+		err = fmt.Errorf("create cluster eventbus failed, port is invalid")
+		return
+	}
+	publicHost := option.PublicHost
+	if publicHost == "" {
+		publicHost = host
+	}
+	publicPort := option.PublicPort
+	if publicPort < 1 {
+		publicPort = port
+	}
+	if publicPort < 1 || publicPort > 65535 {
+		err = fmt.Errorf("create cluster eventbus failed, public port is invalid")
+		return
+	}
+
+	clusterEventbus.registrationAddress = fmt.Sprintf("%s:%d", publicHost, publicPort)
+
+	address := fmt.Sprintf("%s:%d", host, port)
+
+	// ln
+	ln, lnErr := net.Listen("tcp", address)
+	if lnErr != nil {
+		err = fmt.Errorf("create cluster eventbus failed, listen %s failed, %v", address, lnErr)
+		return
+	}
+	clusterEventbus.ln = ln
+
+	// grpcServer
+	var tlsConfig *tls.Config = nil
+	endpointTLS := clusterEventbus.endpointTLS
+	if endpointTLS != nil && endpointTLS.Enable() {
+		tlsConfig, err = endpointTLS.ToServerTLSConfig()
+		if err != nil {
+			err = fmt.Errorf("create cluster eventbus failed, create server tls config failed, %v", err)
+			return
+		}
+	} else {
+		clusterEventbus.endpointTLS = &EndpointTLS{
+			Enable_: false,
+		}
+	}
+
+	grpcServer := newGrpcEventbusServer(ln, clusterEventbus.requestMessageDispatcher, clusterEventbus.handleCount, tlsConfig)
+	clusterEventbus.grpcServer = grpcServer
+	// clients
+	clients, clientsErr := newGrpcEventbusClient(discovery)
+	if clientsErr != nil {
+		err = fmt.Errorf("create cluster eventbus failed, create remote clients failed, %v", clientsErr)
+		return
+	}
+	clusterEventbus.clients = clients
+
+	bus = clusterEventbus
+
+	return
 }
 
 type clusterEventBus struct {
@@ -36,18 +146,13 @@ type clusterEventBus struct {
 	handlersLock               *sync.Mutex
 	eventHandlerInstanceNumber int
 	handlers                   map[string]EventHandler // key is address
+	handleCount                *sync.WaitGroup
 	registrationAddress        string
 	meta                       *EndpointMeta
 	endpointTLS                *EndpointTLS
 	registrations              []Registration
-	handleCount                *sync.WaitGroup
 	enableLocal                bool
 	localed                    *localedEventbus
-}
-
-func (bus *clusterEventBus) sendToDiscovered(registration Registration, msg *message) (reply *ReplyFuture, err error) {
-
-	return
 }
 
 func (bus *clusterEventBus) Send(address string, v interface{}, options ...DeliveryOptions) (err error) {
@@ -62,7 +167,7 @@ func (bus *clusterEventBus) Send(address string, v interface{}, options ...Deliv
 	}
 
 	// if localed
-	if bus.enableLocal {
+	if bus.enableLocal && bus.localed.addressExisted(address, options...) {
 		err = bus.localed.Send(address, v, options...)
 		return
 	}
@@ -83,7 +188,7 @@ func (bus *clusterEventBus) Request(address string, v interface{}, options ...De
 		return
 	}
 	// if localed
-	if bus.enableLocal {
+	if bus.enableLocal && bus.localed.addressExisted(address, options...) {
 		reply = bus.localed.Request(address, v, options...)
 		return
 	}
@@ -162,6 +267,8 @@ func (bus *clusterEventBus) Start(context context.Context) {
 	bus.listen()
 	// grpc serve
 	bus.grpcServer.start()
+	// grpc clients
+	bus.clients.Start()
 
 }
 
@@ -179,7 +286,8 @@ func (bus *clusterEventBus) Close(context context.Context) {
 
 	close(bus.requestMessageDispatcher)
 
-	bus.grpcServer.close()
+	bus.grpcServer.Close()
+	bus.clients.Close()
 
 	closeCh := make(chan struct{}, 1)
 

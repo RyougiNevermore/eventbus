@@ -239,7 +239,7 @@ func (b *ebsResolverBuilder) Build(target resolver.Target, cc resolver.ClientCon
 		discovery: b.discovery,
 	}
 
-	//r.ResolveNow(resolver.ResolveNowOptions{})
+	r.ResolveNow(resolver.ResolveNowOptions{})
 
 	return r, nil
 }
