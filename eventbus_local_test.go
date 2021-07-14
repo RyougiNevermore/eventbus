@@ -44,16 +44,15 @@ func HandlerVoid(head eventbus.MultiMap, body []byte) (result interface{}, err e
 func TestNewEventbus(t *testing.T) {
 
 	eb := eventbus.NewEventbus()
-	_ = eb.RegisterHandler("void", HandlerVoid)
+	_ = eb.RegisterHandler("void", HandlerVoid, "tag1")
 	_ = eb.RegisterHandler("reply", HandlerReply)
 
 	eb.Start(context.TODO())
 
 	options := eventbus.NewDeliveryOptions()
-	options.Add("h1", "1")
-	options.Add("h2", "2")
+	options.AddTag("tag1")
 
-	sendErr := eb.Send("reply", &Arg{
+	sendErr := eb.Send("void", &Arg{
 		Id:       "id",
 		Num:      10,
 		Datetime: time.Now(),
@@ -63,6 +62,9 @@ func TestNewEventbus(t *testing.T) {
 		fmt.Println("send failed", sendErr)
 	}
 
+	options = eventbus.NewDeliveryOptions()
+	options.Add("h1", "1")
+	options.Add("h2", "2")
 	for i := 0; i < 2; i++ {
 		rf := eb.Request("reply", &Arg{
 			Id:       "id",
