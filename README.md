@@ -24,10 +24,10 @@ type Result struct {
     Value string `json:"value,omitempty"`
 }
 
-func HandlerReply(head eventbus.MultiMap, body []byte) (result interface{}, err error) {
+func HandlerReply(event eventbus.Event) (result interface{}, err error) {
     arg := &Arg{}
-    _ = json.Unmarshal(body, arg)
-    fmt.Println("handle reply", head, arg)
+    _ = json.Unmarshal(event.Body(), arg)
+    fmt.Println("handle reply", event.Head(), arg)
     if arg.Num < 0 {
         err = errors.InvalidArgumentErrorWithDetails("bad number", "num", "less than 0")
         return
@@ -38,10 +38,10 @@ func HandlerReply(head eventbus.MultiMap, body []byte) (result interface{}, err 
     return
 }
 
-func HandlerVoid(head eventbus.MultiMap, body []byte) (result interface{}, err error) {
+func HandlerVoid(event eventbus.Event) (result interface{}, err error) {
     arg := &Arg{}
-    _ = json.Unmarshal(body, arg)
-    fmt.Println("handle void", head, arg)
+    _ = json.Unmarshal(event.Body(), arg)
+    fmt.Println("handle void", event.Head(), arg)
     return
 }
 
@@ -75,7 +75,7 @@ for i := 0; i < 2; i++ {
         Datetime: time.Now(),
     }, options)
     result := &Result{}
-    requestErr := rf.Result(result)
+    requestErr := rf.Get(result)
     if requestErr != nil {
     	fmt.Println("request failed", requestErr)
     } else {
