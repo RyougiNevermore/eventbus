@@ -20,7 +20,28 @@ func newMessage(address string, v interface{}, options []DeliveryOptions) (msg *
 	msg.Body = jsonEncode(v)
 	if options != nil && len(options) > 0 {
 		for _, option := range options {
-			msg.Head.Merge(option.MultiMap)
+			for _, k := range option.Keys() {
+				ov, hasV := msg.Head.Values(k)
+				if !hasV {
+					ov = make([]string, 0, 1)
+				}
+				v, _ := option.Values(k)
+				if v == nil {
+					v = make([]string, 0, 1)
+				}
+				for i := 0; i < len(v); i++ {
+					exists := false
+					for _, ovv := range ov {
+						if ovv == v[i] {
+							exists = true
+						}
+					}
+					if !exists {
+						ov = append(ov, v[i])
+					}
+				}
+				msg.Head.Put(k, ov)
+			}
 		}
 	}
 	msg.putAddress(address)

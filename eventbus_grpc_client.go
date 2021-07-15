@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ebsGrpcSchema = "ebs"
+	ebsGrpcSchema                     = "ebs"
 	defaultGrpcClientCacheNumCounters = 128 * (1 << 20) / 100
 	defaultGrpcClientCacheMaxCost     = 128 * (1 << 20)
 )
@@ -90,7 +90,7 @@ func (client *grpcEventbusClient) Send(msg *message) (err error) {
 	return
 }
 
-func (client *grpcEventbusClient) Request(msg *message) (reply *ReplyFuture) {
+func (client *grpcEventbusClient) Request(msg *message) (reply ReplyFuture) {
 	if client.closed() {
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, client is closed"))
 		return

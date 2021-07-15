@@ -1,21 +1,20 @@
 package eventbus
 
 import (
-	"context"
 	"github.com/aacfactory/errors"
 )
 
 func NewDeliveryOptions() DeliveryOptions {
-	return DeliveryOptions{
+	return &defaultDeliveryOptions{
 		MultiMap{},
 	}
 }
 
-type DeliveryOptions struct {
+type defaultDeliveryOptions struct {
 	MultiMap
 }
 
-func (options *DeliveryOptions) AddTag(tags ...string) {
+func (options *defaultDeliveryOptions) AddTag(tags ...string) {
 	if tags == nil {
 		return
 	}
@@ -25,45 +24,35 @@ func (options *DeliveryOptions) AddTag(tags ...string) {
 	}
 }
 
-type Eventbus interface {
-	Send(address string, v interface{}, options ...DeliveryOptions) (err error)
-	Request(address string, v interface{}, options ...DeliveryOptions) (reply *ReplyFuture)
-	RegisterHandler(address string, handler EventHandler, tags ...string) (err error)
-	Start(context context.Context)
-	Close(context context.Context)
-}
-
-type EventHandler func(head MultiMap, body []byte) (result interface{}, err error)
-
-func newFuture(ch <-chan *message) *ReplyFuture {
-	return &ReplyFuture{
+func newFuture(ch <-chan *message) ReplyFuture {
+	return &defaultReplyFuture{
 		ch: ch,
 	}
 }
 
-func newSucceedFuture(msg *message) *ReplyFuture {
+func newSucceedFuture(msg *message) ReplyFuture {
 	ch := make(chan *message, 1)
 	ch <- msg
 	close(ch)
-	return &ReplyFuture{
+	return &defaultReplyFuture{
 		ch: ch,
 	}
 }
 
-func newFailedFuture(err error) *ReplyFuture {
+func newFailedFuture(err error) ReplyFuture {
 	ch := make(chan *message, 1)
 	ch <- failedReplyMessage(err)
 	close(ch)
-	return &ReplyFuture{
+	return &defaultReplyFuture{
 		ch: ch,
 	}
 }
 
-type ReplyFuture struct {
+type defaultReplyFuture struct {
 	ch <-chan *message
 }
 
-func (r *ReplyFuture) Result(v interface{}) (err error) {
+func (r *defaultReplyFuture) Get(v interface{}) (err error) {
 	msg, _ := <-r.ch
 	if msg.failed() {
 		err = msg.cause()
@@ -74,4 +63,21 @@ func (r *ReplyFuture) Result(v interface{}) (err error) {
 	}
 	err = jsonAPI().Unmarshal(msg.Body, v)
 	return
+}
+
+type defaultEventHead struct {
+	MultiMap
+}
+
+type defaultEvent struct {
+	head defaultEventHead
+	body []byte
+}
+
+func (e *defaultEvent) Head() EventHead {
+	return e.head
+}
+
+func (e *defaultEvent) Body() []byte {
+	return e.body
 }

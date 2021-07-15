@@ -78,7 +78,7 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 	return
 }
 
-func (eb *localedEventbus) Request(address string, v interface{}, options ...DeliveryOptions) (reply *ReplyFuture) {
+func (eb *localedEventbus) Request(address string, v interface{}, options ...DeliveryOptions) (reply ReplyFuture) {
 	if address == "" {
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, address is empty"))
 		return
@@ -211,7 +211,7 @@ func (eb *localedEventbus) listen() {
 					}
 					continue
 				}
-				reply, handleErr := handler(msg.Head, msg.Body)
+				reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
 				if replyCh != nil {
 					var replyMsg *message
 					if handleErr != nil {

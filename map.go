@@ -55,7 +55,15 @@ func (h MultiMap) Merge(o ...MultiMap) {
 				ov = make([]string, 0, 1)
 			}
 			for i := 0; i < len(v); i++ {
-				ov = append(ov, v[i])
+				exists := false
+				for _, ovv := range ov {
+					if ovv == v[i] {
+						exists = true
+					}
+				}
+				if !exists {
+					ov = append(ov, v[i])
+				}
 			}
 			h.Put(k, ov)
 		}

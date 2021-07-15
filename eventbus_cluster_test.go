@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestNewClusterEventbus(t *testing.T)  {
+func TestNewClusterEventbus(t *testing.T) {
 
 	discovery := NewTestDiscovery()
 
@@ -29,7 +29,7 @@ func TestNewClusterEventbus(t *testing.T)  {
 	defer c2.Close(context.TODO())
 
 	var err error
-	var reply *eventbus.ReplyFuture
+	var reply eventbus.ReplyFuture
 	result := &Result{}
 
 	// c1 local good
@@ -56,7 +56,7 @@ func TestNewClusterEventbus(t *testing.T)  {
 		Num:      1,
 		Datetime: time.Now(),
 	})
-	err = reply.Result(result)
+	err = reply.Get(result)
 	if err != nil {
 		t.Error("c1 request", err)
 	}
@@ -86,7 +86,7 @@ func TestNewClusterEventbus(t *testing.T)  {
 		Num:      1,
 		Datetime: time.Now(),
 	})
-	err = reply.Result(result)
+	err = reply.Get(result)
 	if err != nil {
 		t.Error("c2 request", err)
 	}
@@ -164,31 +164,30 @@ func createEventbusB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 	return
 }
 
-func HandleRequestLocalOnly(head eventbus.MultiMap, body []byte) (result interface{}, err error) {
+func HandleRequestLocalOnly(event eventbus.Event) (result interface{}, err error) {
 
-	fmt.Println("handle local only:", head, string(body))
+	fmt.Println("handle local only:", event.Head(), string(event.Body()))
 
 	result = &Result{Value: time.Now().String()}
 
 	return
 }
 
-
-func HandleSend(head eventbus.MultiMap, body []byte) (result interface{}, err error) {
-	fmt.Println("handle send:", head, string(body))
+func HandleSend(event eventbus.Event) (result interface{}, err error) {
+	fmt.Println("handle send:", event.Head(), string(event.Body()))
 	return
 }
 
-func HandleRequest(head eventbus.MultiMap, body []byte) (result interface{}, err error) {
+func HandleRequest(event eventbus.Event) (result interface{}, err error) {
 
 	arg := &Arg{}
-	decodeErr := json.Unmarshal(body, arg)
+	decodeErr := json.Unmarshal(event.Body(), arg)
 	if decodeErr != nil {
 		err = errors.InvalidArgumentErrorWithDetails("bad body")
 		return
 	}
 
-	fmt.Println("handle reply", head, string(body))
+	fmt.Println("handle reply", event.Head(), string(event.Body()))
 	if arg.Num < 0 {
 		err = errors.InvalidArgumentErrorWithDetails("bad number", "num", "less than 0")
 		return

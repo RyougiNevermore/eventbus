@@ -177,7 +177,7 @@ func (bus *clusterEventBus) Send(address string, v interface{}, options ...Deliv
 	return
 }
 
-func (bus *clusterEventBus) Request(address string, v interface{}, options ...DeliveryOptions) (reply *ReplyFuture) {
+func (bus *clusterEventBus) Request(address string, v interface{}, options ...DeliveryOptions) (reply ReplyFuture) {
 	if address == "" {
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, address is empty"))
 		return
@@ -334,7 +334,7 @@ func (bus *clusterEventBus) listen() {
 					}
 					continue
 				}
-				reply, handleErr := handler(msg.Head, msg.Body)
+				reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
 				if replyCh != nil {
 					var replyMsg *message
 					if handleErr != nil {
