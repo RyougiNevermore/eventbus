@@ -62,7 +62,7 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 	}
 
 	if existed := eb.addressExisted(address, options...); !existed {
-		err = errors.ServiceError(fmt.Sprintf("eventbus send failed, event handler for address[%s] is not bound", address))
+		err = errors.NotFoundError(fmt.Sprintf("eventbus send failed, event handler for address[%s] is not bound", address))
 		return
 	}
 
@@ -95,7 +95,7 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 	}
 
 	if existed := eb.addressExisted(address, options...); !existed {
-		reply = newFailedFuture(errors.ServiceError(fmt.Sprintf("eventbus request failed, event handler for address[%s] is not bound", address)))
+		reply = newFailedFuture(errors.NotFoundError(fmt.Sprintf("eventbus request failed, event handler for address[%s] is not bound", address)))
 		return
 	}
 
@@ -152,6 +152,11 @@ func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler,
 
 	eb.handlers[key] = handler
 
+	return
+}
+
+func (eb *localedEventbus) RegisterLocalHandler(address string, handler EventHandler, tags ...string) (err error) {
+	err = eb.RegisterHandler(address, handler, tags...)
 	return
 }
 

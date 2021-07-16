@@ -69,7 +69,7 @@ func TestNewClusterEventbus(t *testing.T) {
 		Datetime: time.Now(),
 	})
 	if err != nil {
-		t.Error("c2 local", err)
+		t.Log("c2 local bad", err)
 	}
 	// c1 send good
 	err = c2.Send("send", &Arg{
@@ -107,15 +107,13 @@ func createEventbusA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 		Tags:                       nil,
 		TLS:                        &eventbus.EndpointTLS{},
 		EventChanCap:               64,
-		EventHandlerInstanceNumber: 2,
-		EnableLocal:                true,
 	}
 
 	bus, err = eventbus.NewClusterEventbus(discovery, options)
 	if err != nil {
 		return
 	}
-	err = bus.RegisterHandler("local", HandleRequestLocalOnly)
+	err = bus.RegisterLocalHandler("local", HandleRequestLocalOnly)
 	if err != nil {
 		return
 	}
@@ -141,8 +139,6 @@ func createEventbusB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 		Tags:                       nil,
 		TLS:                        &eventbus.EndpointTLS{},
 		EventChanCap:               64,
-		EventHandlerInstanceNumber: 2,
-		EnableLocal:                false,
 	}
 
 	bus, err = eventbus.NewClusterEventbus(discovery, options)

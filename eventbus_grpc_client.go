@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"fmt"
+	"github.com/aacfactory/errors"
 	"github.com/aacfactory/eventbus/internal"
 	"github.com/dgraph-io/ristretto"
 	"google.golang.org/grpc"
@@ -54,23 +55,23 @@ type grpcEventbusClient struct {
 
 func (client *grpcEventbusClient) Send(msg *message) (err error) {
 	if client.closed() {
-		err = fmt.Errorf("eventbus send failed, client is closed")
+		err = errors.ServiceError("eventbus send failed, client is closed")
 		return
 	}
 	address, hasAddress := msg.getAddress()
 	if !hasAddress {
-		err = fmt.Errorf("eventbus send failed, address is empty")
+		err = errors.ServiceError("eventbus send failed, address is empty")
 		return
 	}
 	tags, _ := msg.getTags()
 
 	conn, has, getErr := client.getConn(address, tags)
 	if getErr != nil {
-		err = fmt.Errorf("eventbus send failed, get address handler failed, %v", getErr)
+		err = getErr
 		return
 	}
 	if !has {
-		err = fmt.Errorf("eventbus request failed, handler of address is not found")
+		err = errors.NotFoundError(fmt.Sprintf("eventbus send failed, handler of address[%s] is not found", address))
 		return
 	}
 	grpcClient := internal.NewEventbusClient(conn)
@@ -83,32 +84,32 @@ func (client *grpcEventbusClient) Send(msg *message) (err error) {
 	}
 	_, sendErr := grpcClient.Send(context.TODO(), remoteMsg)
 	if sendErr != nil {
-		err = fmt.Errorf("eventbus send failed, %v", sendErr)
+		err = errors.ServiceError(sendErr.Error())
 		return
 	}
 
 	return
 }
 
-func (client *grpcEventbusClient) Request(msg *message) (reply ReplyFuture) {
+func (client *grpcEventbusClient) Request(msg *message) (replyMsg *message) {
 	if client.closed() {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, client is closed"))
+		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, client is closed"))
 		return
 	}
 	address, hasAddress := msg.getAddress()
 	if !hasAddress {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, address is empty"))
+		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, address is empty"))
 		return
 	}
 	tags, _ := msg.getTags()
 
 	conn, has, getErr := client.getConn(address, tags)
 	if getErr != nil {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, get address handler failed, %v", getErr))
+		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, get address handler failed, %v", getErr))
 		return
 	}
 	if !has {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, handler of address is not found"))
+		replyMsg = failedReplyMessage(errors.NotFoundError(fmt.Sprintf("eventbus request failed, handler of address[%s] is not found", address)))
 		return
 	}
 	grpcClient := internal.NewEventbusClient(conn)
@@ -121,20 +122,20 @@ func (client *grpcEventbusClient) Request(msg *message) (reply ReplyFuture) {
 	}
 	result, requestErr := grpcClient.Request(context.TODO(), remoteMsg)
 	if requestErr != nil {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, %v", requestErr))
+		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, %v", requestErr))
 		return
 	}
 
 	if result == nil {
-		reply = newSucceedFuture(&message{})
+		replyMsg = &message{}
 		return
 	}
-	replyMsg, replyMsgErr := newMessageFromBytes(result.Header, result.Body)
+	replyMsg0, replyMsgErr := newMessageFromBytes(result.Header, result.Body)
 	if replyMsgErr != nil {
-		reply = newFailedFuture(fmt.Errorf("eventbus request failed, parse result failed, %v", replyMsgErr))
+		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, parse result failed, %v", replyMsgErr))
 		return
 	}
-	reply = newSucceedFuture(replyMsg)
+	replyMsg = replyMsg0
 
 	return
 }
@@ -163,9 +164,13 @@ func (client *grpcEventbusClient) getConn(address string, tags []string) (conn *
 		conn, has = conn0.(*grpc.ClientConn)
 		return
 	}
-	conn1, dailErr := client.dial(key)
+	conn1, has1, dailErr := client.dial(key)
 	if dailErr != nil {
-		err = fmt.Errorf("eventbus get or create client failed for dial failed, address is %s, %v", address, dailErr)
+		err = dailErr
+		return
+	}
+	if !has1 {
+		return
 	}
 	client.connCachedMap.Set(key, conn1, 1)
 	client.connCachedMap.Wait()
@@ -174,17 +179,16 @@ func (client *grpcEventbusClient) getConn(address string, tags []string) (conn *
 	return
 }
 
-func (client *grpcEventbusClient) dial(key string) (conn *grpc.ClientConn, err error) {
+func (client *grpcEventbusClient) dial(key string) (conn *grpc.ClientConn, has bool, err error) {
 
 	address, tags := parseTagsAddress(key)
 
 	registration, has, getErr := client.discovery.Get(defaultGroupName, address, tags...)
 	if getErr != nil {
-		err = fmt.Errorf("get %s handler from discovery failed, %s", address, getErr)
+		err = fmt.Errorf("eventbus get %s handler from discovery failed, %s", address, getErr)
 		return
 	}
 	if !has {
-		err = fmt.Errorf("%s handler is not founed", address)
 		return
 	}
 	registrationTLS := registration.TLS()
@@ -216,13 +220,13 @@ func (client *grpcEventbusClient) dial(key string) (conn *grpc.ClientConn, err e
 		return
 	}
 	conn = conn0
-
+	has = true
 	return
 }
 
 func (client *grpcEventbusClient) onEvictConn(item *ristretto.Item) {
 	conn, ok := item.Value.(*grpc.ClientConn)
-	if !ok {
+	if !ok || conn == nil {
 		return
 	}
 	_ = conn.Close()

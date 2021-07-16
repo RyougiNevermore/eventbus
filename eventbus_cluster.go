@@ -13,20 +13,19 @@ import (
 )
 
 const (
-	defaultGroupName = "_ebs"
+	defaultGroupName = "_ebs_"
 )
 
 type ClusterEventbusOption struct {
-	Host                       string        `json:"host,omitempty"`
-	Port                       int           `json:"port,omitempty"`
-	PublicHost                 string        `json:"publicHost,omitempty"`
-	PublicPort                 int           `json:"publicPort,omitempty"`
-	Meta                       *EndpointMeta `json:"meta,omitempty"`
-	Tags                       []string      `json:"tags,omitempty"`
-	TLS                        *EndpointTLS  `json:"tls,omitempty"`
-	EventChanCap               int           `json:"eventChanCap,omitempty"`
-	EventHandlerInstanceNumber int           `json:"eventHandlerInstanceNumber,omitempty"`
-	EnableLocal                bool          `json:"enableLocal,omitempty"`
+	Host         string        `json:"host,omitempty"`
+	Port         int           `json:"port,omitempty"`
+	PublicHost   string        `json:"publicHost,omitempty"`
+	PublicPort   int           `json:"publicPort,omitempty"`
+	Meta         *EndpointMeta `json:"meta,omitempty"`
+	Tags         []string      `json:"tags,omitempty"`
+	TLS          *EndpointTLS  `json:"tls,omitempty"`
+	EventChanCap int           `json:"eventChanCap,omitempty"`
+	EventWorkers int           `json:"eventWorkers,omitempty"`
 }
 
 func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption) (bus Eventbus, err error) {
@@ -39,36 +38,24 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 	if eventChanCap < 1 {
 		eventChanCap = runtime.NumCPU() * 64
 	}
-	eventHandlerInstanceNumber := option.EventHandlerInstanceNumber
-	if eventHandlerInstanceNumber < 1 {
-		eventHandlerInstanceNumber = runtime.NumCPU() * 2
+	eventWorkers := option.EventWorkers
+	if eventWorkers < 1 {
+		eventWorkers = defaultWorkers
 	}
 
 	clusterEventbus := &clusterEventBus{
-		running:                    0,
-		ln:                         nil,
-		grpcServer:                 nil,
-		discovery:                  discovery,
-		clients:                    nil,
-		requestMessageDispatcher:   make(chan *requestMessage, eventChanCap),
-		handlersLock:               new(sync.Mutex),
-		eventHandlerInstanceNumber: eventHandlerInstanceNumber,
-		handlers:                   make(map[string]EventHandler),
-		handleCount:                new(sync.WaitGroup),
-		registrationAddress:        "",
-		meta:                       option.Meta,
-		endpointTLS:                option.TLS,
-		registrations:              make([]Registration, 0, 1),
-		enableLocal:                option.EnableLocal,
-		localed:                    nil,
-	}
-
-	if option.EnableLocal {
-		localed := NewEventbusWithOption(LocaledEventbusOption{
-			EventChanCap: eventChanCap,
-			EventWorkers: 0,
-		})
-		clusterEventbus.localed = localed
+		running:             0,
+		ln:                  nil,
+		grpcServer:          nil,
+		discovery:           discovery,
+		clients:             nil,
+		handlersLock:        new(sync.Mutex),
+		handlers:            make(map[string]EventHandler),
+		handleCount:         new(sync.WaitGroup),
+		registrationAddress: "",
+		meta:                option.Meta,
+		endpointTLS:         option.TLS,
+		registrations:       make([]Registration, 0, 1),
 	}
 
 	host := option.Host
@@ -106,6 +93,14 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 	}
 	clusterEventbus.ln = ln
 
+	// workers
+	wp := &workerPool{
+		WorkerFunc:      clusterEventbus.handleRequestMessage,
+		MaxWorkersCount: eventWorkers,
+	}
+
+	clusterEventbus.requestWorkers = wp
+
 	// grpcServer
 	var tlsConfig *tls.Config = nil
 	endpointTLS := clusterEventbus.endpointTLS
@@ -121,7 +116,7 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 		}
 	}
 
-	grpcServer := newGrpcEventbusServer(ln, clusterEventbus.requestMessageDispatcher, clusterEventbus.handleCount, tlsConfig)
+	grpcServer := newGrpcEventbusServer(ln, wp, clusterEventbus.handleCount, tlsConfig)
 	clusterEventbus.grpcServer = grpcServer
 	// clients
 	clients, clientsErr := newGrpcEventbusClient(discovery)
@@ -137,22 +132,19 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 }
 
 type clusterEventBus struct {
-	running                    int64
-	ln                         net.Listener
-	grpcServer                 *grpcEventBusServer
-	discovery                  ServiceDiscovery
-	clients                    *grpcEventbusClient
-	requestMessageDispatcher   chan *requestMessage
-	handlersLock               *sync.Mutex
-	eventHandlerInstanceNumber int
-	handlers                   map[string]EventHandler // key is address
-	handleCount                *sync.WaitGroup
-	registrationAddress        string
-	meta                       *EndpointMeta
-	endpointTLS                *EndpointTLS
-	registrations              []Registration
-	enableLocal                bool
-	localed                    *localedEventbus
+	running             int64
+	requestWorkers      *workerPool
+	ln                  net.Listener
+	grpcServer          *grpcEventBusServer
+	discovery           ServiceDiscovery
+	clients             *grpcEventbusClient
+	handlersLock        *sync.Mutex
+	handlers            map[string]EventHandler
+	handleCount         *sync.WaitGroup
+	registrationAddress string
+	meta                *EndpointMeta
+	endpointTLS         *EndpointTLS
+	registrations       []Registration
 }
 
 func (bus *clusterEventBus) Send(address string, v interface{}, options ...DeliveryOptions) (err error) {
@@ -166,14 +158,23 @@ func (bus *clusterEventBus) Send(address string, v interface{}, options ...Deliv
 		return
 	}
 
-	// if localed
-	if bus.enableLocal && bus.localed.addressExisted(address, options...) {
-		err = bus.localed.Send(address, v, options...)
+	msg := newMessage(address, v, options)
+
+	if existed := bus.addressExisted(address, options...); existed {
+		rm := &requestMessage{
+			message: msg,
+			replyCh: nil,
+		}
+
+		if !bus.requestWorkers.SendRequestMessage(rm) {
+			err = errors.ServiceError("eventbus send failed, send to workers failed")
+			return
+		}
 		return
 	}
-
 	// remote
 	err = bus.clients.Send(newMessage(address, v, options))
+
 	return
 }
 
@@ -187,18 +188,57 @@ func (bus *clusterEventBus) Request(address string, v interface{}, options ...De
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, eventbus has been closed"))
 		return
 	}
-	// if localed
-	if bus.enableLocal && bus.localed.addressExisted(address, options...) {
-		reply = bus.localed.Request(address, v, options...)
+
+	msg := newMessage(address, v, options)
+
+	replyCh := make(chan *message, 1)
+	reply = newFuture(replyCh)
+
+	if existed := bus.addressExisted(address, options...); existed {
+
+		rm := &requestMessage{
+			message: msg,
+			replyCh: replyCh,
+		}
+
+		if !bus.requestWorkers.SendRequestMessage(rm) {
+			rm.replyCh <- failedReplyMessage(errors.ServiceError("eventbus send failed, send to workers failed"))
+			close(rm.replyCh)
+		}
+
 		return
 	}
 
 	// remote
-	reply = bus.clients.Request(newMessage(address, v, options))
+	replyMsg := bus.clients.Request(msg)
+	replyCh <- replyMsg
+
 	return
 }
 
 func (bus *clusterEventBus) RegisterHandler(address string, handler EventHandler, tags ...string) (err error) {
+
+	err = bus.RegisterLocalHandler(address, handler, tags...)
+	if err != nil {
+		return
+	}
+
+	registration, publishErr := bus.discovery.Publish(defaultGroupName, address, "tcp", bus.registrationAddress, tags, bus.meta, bus.endpointTLS)
+
+	if publishErr != nil {
+		bus.handlersLock.Lock()
+		delete(bus.handlers, address)
+		bus.handlersLock.Unlock()
+		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, publishErr)
+		return
+	}
+
+	bus.registrations = append(bus.registrations, registration)
+
+	return
+}
+
+func (bus *clusterEventBus) RegisterLocalHandler(address string, handler EventHandler, tags ...string) (err error) {
 	if !bus.closed() {
 		err = fmt.Errorf("eventbus register handler failed, it is running")
 		return
@@ -228,28 +268,6 @@ func (bus *clusterEventBus) RegisterHandler(address string, handler EventHandler
 	tags = tagsClean(tags)
 
 	bus.handlers[tagsAddress(address, tags)] = handler
-
-	if bus.enableLocal {
-		registerLocalErr := bus.localed.RegisterHandler(address, handler, tags...)
-		if registerLocalErr != nil {
-			err = registerLocalErr
-			return
-		}
-	}
-
-	registration, publishErr := bus.discovery.Publish(defaultGroupName, address, "tcp", bus.registrationAddress, tags, bus.meta, bus.endpointTLS)
-
-	if publishErr != nil {
-		delete(bus.handlers, address)
-		if bus.enableLocal {
-			delete(bus.localed.handlers, address)
-		}
-		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, publishErr)
-		return
-	}
-
-	bus.registrations = append(bus.registrations, registration)
-
 	return
 }
 
@@ -259,12 +277,8 @@ func (bus *clusterEventBus) Start(context context.Context) {
 	}
 	atomic.StoreInt64(&bus.running, int64(1))
 
-	// local listen
-	if bus.enableLocal {
-		bus.localed.Start(context)
-	}
-	// listen
-	bus.listen()
+	// workers
+	bus.requestWorkers.Start()
 	// grpc serve
 	bus.grpcServer.start()
 	// grpc clients
@@ -284,7 +298,7 @@ func (bus *clusterEventBus) Close(context context.Context) {
 		_ = bus.discovery.UnPublish(registration)
 	}
 
-	close(bus.requestMessageDispatcher)
+	bus.requestWorkers.Stop()
 
 	bus.grpcServer.Close()
 	bus.clients.Close()
@@ -310,43 +324,39 @@ func (bus *clusterEventBus) closed() bool {
 	return atomic.LoadInt64(&bus.running) == int64(0)
 }
 
-func (bus *clusterEventBus) listen() {
-	for i := 0; i < bus.eventHandlerInstanceNumber; i++ {
-		go func(bus *clusterEventBus) {
-			for {
-				requestMsg, ok := <-bus.requestMessageDispatcher
-				if !ok {
-					break
-				}
-				msg := requestMsg.message
-				address, has := msg.getAddress()
-				if !has || address == "" {
-					panic(fmt.Errorf("eventbus handle event failed, address is empty, %v", msg))
-				}
-				tags, _ := msg.getTags()
-				key := tagsAddress(address, tags)
-				handler, existed := bus.handlers[key]
-				replyCh := requestMsg.replyCh
-				if !existed {
-					if replyCh != nil {
-						replyCh <- failedReplyMessage(fmt.Errorf("eventbus handle event failed, no handler handle address %s, %v", address, msg))
-						close(replyCh)
-					}
-					continue
-				}
-				reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
-				if replyCh != nil {
-					var replyMsg *message
-					if handleErr != nil {
-						replyMsg = failedReplyMessage(handleErr)
-					} else {
-						replyMsg = succeedReplyMessage(reply)
-					}
-					replyCh <- replyMsg
-					close(replyCh)
-				}
-				bus.handleCount.Done()
-			}
-		}(bus)
+func (bus *clusterEventBus) addressExisted(address string, options ...DeliveryOptions) (has bool) {
+	tags := tagsFromDeliveryOptions(options...)
+	key := tagsAddress(address, tags)
+	_, has = bus.handlers[key]
+	return
+}
+
+func (bus *clusterEventBus) handleRequestMessage(requestMsg *requestMessage) (err error) {
+	bus.handleCount.Add(1)
+	defer bus.handleCount.Done()
+
+	msg := requestMsg.message
+	address, has := msg.getAddress()
+	if !has || address == "" {
+		err = fmt.Errorf("eventbus handle event failed, address is empty, %v", msg)
+		return
 	}
+	tags, _ := msg.getTags()
+	key := tagsAddress(address, tags)
+	handler, existed := bus.handlers[key]
+	replyCh := requestMsg.replyCh
+	if !existed {
+		err = errors.NotFoundError(fmt.Sprintf("eventbus handle event failed, event handler for address[%s] is not bound", address))
+		return
+	}
+	reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
+	if handleErr != nil {
+		err = handleErr
+		return
+	}
+	replyCh <- succeedReplyMessage(reply)
+	close(replyCh)
+	bus.handleCount.Done()
+
+	return
 }

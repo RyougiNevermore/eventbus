@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func newGrpcEventbusServer(ln net.Listener, dispatchMessageCh chan<- *requestMessage, handleCount *sync.WaitGroup, tlsConfig *tls.Config) (srv *grpcEventBusServer) {
+func newGrpcEventbusServer(ln net.Listener, requestWorkers *workerPool, handleCount *sync.WaitGroup, tlsConfig *tls.Config) (srv *grpcEventBusServer) {
 	var server *grpc.Server
 	if tlsConfig != nil {
 		server = grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
@@ -21,12 +21,12 @@ func newGrpcEventbusServer(ln net.Listener, dispatchMessageCh chan<- *requestMes
 		server = grpc.NewServer()
 	}
 	srv = &grpcEventBusServer{
-		running:           int64(1),
-		dispatchMessageCh: dispatchMessageCh,
-		server:            server,
-		ln:                ln,
-		handleCount:       handleCount,
-		tlsConfig:         tlsConfig,
+		running:        int64(1),
+		requestWorkers: requestWorkers,
+		server:         server,
+		ln:             ln,
+		handleCount:    handleCount,
+		tlsConfig:      tlsConfig,
 	}
 	internal.RegisterEventbusServer(server, srv)
 	return
@@ -34,12 +34,12 @@ func newGrpcEventbusServer(ln net.Listener, dispatchMessageCh chan<- *requestMes
 
 type grpcEventBusServer struct {
 	internal.UnimplementedEventbusServer
-	running           int64
-	dispatchMessageCh chan<- *requestMessage
-	server            *grpc.Server
-	ln                net.Listener
-	handleCount       *sync.WaitGroup
-	tlsConfig         *tls.Config
+	running        int64
+	requestWorkers *workerPool
+	server         *grpc.Server
+	ln             net.Listener
+	handleCount    *sync.WaitGroup
+	tlsConfig      *tls.Config
 }
 
 func (srv *grpcEventBusServer) Send(_ context.Context, remoteMessage *internal.Message) (result *internal.Void, err error) {
@@ -59,9 +59,15 @@ func (srv *grpcEventBusServer) Send(_ context.Context, remoteMessage *internal.M
 	}
 
 	srv.handleCount.Add(1)
-	srv.dispatchMessageCh <- &requestMessage{
+
+	rm := &requestMessage{
 		message: msg,
 		replyCh: nil,
+	}
+
+	if !srv.requestWorkers.SendRequestMessage(rm) {
+		err = fmt.Errorf("eventbus send failed, send to workers failed")
+		return
 	}
 
 	result = &internal.Void{}
@@ -87,14 +93,23 @@ func (srv *grpcEventBusServer) Request(_ context.Context, remoteMessage *interna
 	replyCh := make(chan *message, 1)
 
 	srv.handleCount.Add(1)
-	srv.dispatchMessageCh <- &requestMessage{
+
+	rm := &requestMessage{
 		message: msg,
 		replyCh: replyCh,
 	}
 
+	if !srv.requestWorkers.SendRequestMessage(rm) {
+		err = fmt.Errorf("eventbus send failed, send to workers failed")
+		return
+	}
+
 	reply := <-replyCh
 	if reply == nil {
-		err = fmt.Errorf("eventbus handle remote request failed, no reply message fetched")
+		result = &internal.Message{
+			Header: []byte{'{', '}'},
+			Body:   []byte{},
+		}
 		return
 	}
 
