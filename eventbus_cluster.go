@@ -65,8 +65,8 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 
 	if option.EnableLocal {
 		localed := NewEventbusWithOption(LocaledEventbusOption{
-			EventChanCap:               eventChanCap,
-			EventHandlerInstanceNumber: eventHandlerInstanceNumber,
+			EventChanCap: eventChanCap,
+			EventWorkers: 0,
 		})
 		clusterEventbus.localed = localed
 	}
