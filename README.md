@@ -101,8 +101,7 @@ options := eventbus.ClusterEventbusOption{
     Tags:                       nil, // 标签，一般用于版本化与运行隔离化
     TLS:                        &eventbus.EndpointTLS{}, // TLS 配置
     EventChanCap:               64, // 事件 chan 的长度
-    EventHandlerInstanceNumber: 2,  // 事件处理器的实例个数
-    EnableLocal:                true, // 是否开启本地处理器，如果关闭，则直接使用远程模式，建议开启
+    EventWorkers:               2,  // 工作协程数量
 }
 // discovery
 discovery := Foo{}
