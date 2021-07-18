@@ -2,6 +2,7 @@ package eventbus
 
 import (
 	"github.com/aacfactory/errors"
+	"runtime"
 )
 
 func NewDeliveryOptions() DeliveryOptions {
@@ -53,13 +54,18 @@ type defaultReplyFuture struct {
 }
 
 func (r *defaultReplyFuture) Get(v interface{}) (err error) {
-	msg, _ := <-r.ch
+	msg, ok := <-r.ch
+	if !ok {
+		err = errors.ServiceError("eventbus get reply failed, no reply")
+		return
+	}
 	if msg.failed() {
 		err = msg.cause()
 		return
 	}
 	if (msg.Body == nil || len(msg.Body) == 0) && v != nil {
 		err = errors.ServiceError("eventbus get reply failed, result is nil")
+		return
 	}
 	err = jsonAPI().Unmarshal(msg.Body, v)
 	return
@@ -80,4 +86,8 @@ func (e *defaultEvent) Head() EventHead {
 
 func (e *defaultEvent) Body() []byte {
 	return e.body
+}
+
+func getDefaultEventChanCap() int {
+	return runtime.NumCPU() * 256
 }

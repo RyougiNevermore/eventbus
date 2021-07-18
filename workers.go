@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-const (
-	defaultWorkers = 256 * 1024
-)
+func getDefaultWorkers() int {
+	return runtime.NumCPU() * 2
+}
 
 type requestMessageHandle func(rm *requestMessage) (err error)
 

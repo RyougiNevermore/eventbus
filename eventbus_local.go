@@ -4,25 +4,24 @@ import (
 	"context"
 	"fmt"
 	"github.com/aacfactory/errors"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 )
 
 func NewEventbus() Eventbus {
-	return NewEventbusWithOption(LocaledEventbusOption{EventChanCap: runtime.NumCPU() * 64, EventWorkers: defaultWorkers})
+	return NewEventbusWithOption(LocaledEventbusOption{EventChanCap: 0, EventWorkers: 0})
 }
 
 func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 
 	eventChanCap := option.EventChanCap
 	if eventChanCap < 1 {
-		eventChanCap = runtime.NumCPU() * 64
+		eventChanCap = getDefaultEventChanCap()
 	}
 	eventWorkers := option.EventWorkers
 	if eventWorkers < 1 {
-		eventWorkers = defaultWorkers
+		eventWorkers = getDefaultWorkers()
 	}
 
 	eb = &localedEventbus{

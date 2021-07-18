@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/aacfactory/eventbus"
+	"math/rand"
 	"runtime"
 	"testing"
 	"time"
@@ -31,6 +32,9 @@ func BenchmarkNewEventbus(b *testing.B) {
 	runtime.GOMAXPROCS(0)
 	iterations := int64(b.N)
 
+	//eb := eventbus.NewEventbusWithOption(eventbus.LocaledEventbusOption{
+	//	EventWorkers: 64,
+	//})
 	eb := eventbus.NewEventbus()
 	_ = eb.RegisterHandler("void", HandlerVoidBenchmark, "tag1")
 	_ = eb.RegisterHandler("reply", HandlerReplyBenchmark)
@@ -56,17 +60,15 @@ func BenchmarkNewEventbus(b *testing.B) {
 		options = eventbus.NewDeliveryOptions()
 		options.Add("h1", "1")
 		options.Add("h2", "2")
-		for i := 0; i < 2; i++ {
-			rf := eb.Request("reply", &Arg{
-				Id:       "id",
-				Num:      i - 1,
-				Datetime: time.Now(),
-			}, options)
-			result := &Result{}
-			requestErr := rf.Get(result)
-			if requestErr != nil {
-			} else {
-			}
+		rf := eb.Request("reply", &Arg{
+			Id:       "id",
+			Num:      rand.Intn(2),
+			Datetime: time.Now(),
+		}, options)
+		result := &Result{}
+		requestErr := rf.Get(result)
+		if requestErr != nil {
+		} else {
 		}
 	}
 
