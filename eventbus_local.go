@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/aacfactory/errors"
+	"github.com/aacfactory/workers"
 	"strings"
-	"sync"
 	"sync/atomic"
+	"time"
 )
 
 func NewEventbus() Eventbus {
-	return NewEventbusWithOption(LocaledEventbusOption{EventChanCap: 0, EventWorkers: 0})
+	return NewEventbusWithOption(LocaledEventbusOption{EventChanCap: 0, Workers: 0})
 }
 
 func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
@@ -19,39 +20,38 @@ func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 	if eventChanCap < 1 {
 		eventChanCap = getDefaultEventChanCap()
 	}
-	eventWorkers := option.EventWorkers
-	if eventWorkers < 1 {
-		eventWorkers = getDefaultWorkers()
-	}
+	eventWorkers := option.Workers
 
 	eb = &localedEventbus{
-		running:      int64(0),
-		handlersLock: new(sync.Mutex),
-		handlers:     make(map[string]EventHandler),
-		handleCount:  new(sync.WaitGroup),
+		running:  int64(0),
+		handlers: newLocalEventHandleStore(),
 	}
 
-	wp := &workerPool{
-		WorkerFunc:      eb.handleRequestMessage,
-		MaxWorkersCount: eventWorkers,
-	}
+	rw := workers.NewWorkers(workers.Option{
+		MaxWorkerNum:      eventWorkers,
+		MaxIdleTime:       option.WorkersMaxIdleTime,
+		CommandTimeout:    option.WorkersCommandTimeout,
+		CommandBufferSize: option.WorkersCommandBufferSize,
+		Fn:                eb.handleRequestMessageWorkFn,
+	})
 
-	eb.requestWorkers = wp
+	eb.requestWorkers = rw
 
 	return
 }
 
 type LocaledEventbusOption struct {
-	EventChanCap int `json:"eventChanCap,omitempty"`
-	EventWorkers int `json:"eventWorkers,omitempty"`
+	EventChanCap             int           `json:"eventChanCap,omitempty"`
+	WorkersMaxIdleTime       time.Duration `json:"workersMaxIdleTime,omitempty"`
+	WorkersCommandTimeout    time.Duration `json:"workersCommandTimeout,omitempty"`
+	WorkersCommandBufferSize int           `json:"workersCommandBufferSize,omitempty"`
+	Workers                  int           `json:"workers,omitempty"`
 }
 
 type localedEventbus struct {
 	running        int64
-	handlersLock   *sync.Mutex
-	requestWorkers *workerPool
-	handlers       map[string]EventHandler
-	handleCount    *sync.WaitGroup
+	requestWorkers *workers.Workers
+	handlers       *localEventHandleStore
 }
 
 func (eb *localedEventbus) Send(address string, v interface{}, options ...DeliveryOptions) (err error) {
@@ -60,12 +60,13 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 		return
 	}
 
-	if existed := eb.addressExisted(address, options...); !existed {
-		err = errors.NotFoundError(fmt.Sprintf("eventbus send failed, event handler for address[%s] is not bound", address))
+	msg := newMessage(address, v, options)
+
+	tags, _ := msg.getTags()
+	if !eb.handlers.contains(address, tags) {
+		err = errors.ServiceError(fmt.Sprintf("eventbus send failed, %s has not be registered", address))
 		return
 	}
-
-	msg := newMessage(address, v, options)
 
 	if eb.closed() {
 		err = errors.ServiceError("eventbus send failed, eventbus has been closed")
@@ -77,9 +78,7 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 		replyCh: nil,
 	}
 
-	eb.handleCount.Add(1)
-
-	if !eb.requestWorkers.SendRequestMessage(rm) {
+	if !eb.requestWorkers.Command(rm) {
 		err = errors.ServiceError("eventbus send failed, send to workers failed")
 		return
 	}
@@ -90,11 +89,6 @@ func (eb *localedEventbus) Send(address string, v interface{}, options ...Delive
 func (eb *localedEventbus) Request(address string, v interface{}, options ...DeliveryOptions) (reply ReplyFuture) {
 	if address == "" {
 		reply = newFailedFuture(fmt.Errorf("eventbus request failed, address is empty"))
-		return
-	}
-
-	if existed := eb.addressExisted(address, options...); !existed {
-		reply = newFailedFuture(errors.NotFoundError(fmt.Sprintf("eventbus request failed, event handler for address[%s] is not bound", address)))
 		return
 	}
 
@@ -113,8 +107,7 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 		replyCh: replyCh,
 	}
 
-	eb.handleCount.Add(1)
-	if !eb.requestWorkers.SendRequestMessage(rm) {
+	if !eb.requestWorkers.Command(rm) {
 		rm.replyCh <- failedReplyMessage(errors.ServiceError("eventbus send failed, send to workers failed"))
 		close(rm.replyCh)
 	}
@@ -126,9 +119,6 @@ func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler,
 		err = fmt.Errorf("eventbus register handler failed, it is running")
 		return
 	}
-
-	eb.handlersLock.Lock()
-	defer eb.handlersLock.Unlock()
 
 	if address == "" {
 		err = errors.ServiceError("eventbus register event handler failed, address is empty")
@@ -142,14 +132,14 @@ func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler,
 		err = errors.ServiceError("eventbus register event handler failed, handler is nil")
 		return
 	}
-	key := tagsAddress(address, tags)
-	_, has := eb.handlers[key]
+
+	_, has := eb.handlers.get(address, tags)
 	if has {
 		err = errors.ServiceError("eventbus register event handler failed, address event handler has been bound")
 		return
 	}
 
-	eb.handlers[key] = handler
+	eb.handlers.put(address, tags, handler)
 
 	return
 }
@@ -180,7 +170,7 @@ func (eb *localedEventbus) Close(context context.Context) {
 	closeCh := make(chan struct{}, 1)
 
 	go func(closeCh chan struct{}, eb *localedEventbus) {
-		eb.handleCount.Wait()
+		eb.requestWorkers.Sync()
 		closeCh <- struct{}{}
 	}(closeCh, eb)
 
@@ -198,37 +188,30 @@ func (eb *localedEventbus) closed() bool {
 	return atomic.LoadInt64(&eb.running) == int64(0)
 }
 
-func (eb *localedEventbus) addressExisted(address string, options ...DeliveryOptions) (has bool) {
-	tags := tagsFromDeliveryOptions(options...)
-	key := tagsAddress(address, tags)
-	_, has = eb.handlers[key]
-	return
-}
-
-func (eb *localedEventbus) handleRequestMessage(requestMsg *requestMessage) (err error) {
-
+func (eb *localedEventbus) handleRequestMessageWorkFn(v interface{}, meta map[string]string) {
+	if v == nil {
+		return
+	}
+	requestMsg, ok := v.(*requestMessage)
+	if !ok {
+		return
+	}
 	msg := requestMsg.message
 	address, has := msg.getAddress()
 	if !has || address == "" {
-		err = fmt.Errorf("eventbus handle event failed, address is empty, %v", msg)
+		requestMsg.failed(fmt.Errorf("eventbus handle event failed, address is empty, %v", msg))
 		return
 	}
 	tags, _ := msg.getTags()
-	key := tagsAddress(address, tags)
-	handler, existed := eb.handlers[key]
-	replyCh := requestMsg.replyCh
+	handler, existed := eb.handlers.get(address, tags)
 	if !existed {
-		err = fmt.Errorf("eventbus handle event failed, no handler handle address %s", address)
+		requestMsg.failed(fmt.Errorf("eventbus handle event failed, no handler handle address %s", address))
 		return
 	}
 	reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
 	if handleErr != nil {
-		err = handleErr
+		requestMsg.failed(handleErr)
 		return
 	}
-	replyCh <- succeedReplyMessage(reply)
-	close(replyCh)
-	eb.handleCount.Done()
-
-	return
+	requestMsg.succeed(reply)
 }
