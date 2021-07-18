@@ -276,7 +276,7 @@ func (bus *natsEventbus) Request(address string, v interface{}, options ...Deliv
 	}
 
 	replyId := xid.New().String()
-	bus.replies.Set(replyId, reply, 1)
+	bus.replies.Set(replyId, rm, 1)
 	bus.replies.Wait()
 	msg.putReplyAddress(replyId)
 
@@ -316,7 +316,7 @@ func (bus *natsEventbus) RegisterHandler(address string, handler EventHandler, t
 	if err != nil {
 		bus.handlers.remove(address, tags)
 		_ = bus.discovery.UnPublish(registration)
-		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, publishErr)
+		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, err)
 		return
 	}
 
@@ -412,7 +412,9 @@ func (bus *natsEventbus) closed() bool {
 }
 
 func (bus *natsEventbus) subNatsReply(natsMsg *nats.Msg) {
-
+	if string(natsMsg.Data) == "+ACK" {
+		return
+	}
 	msg := &message{}
 	decodeErr := jsonAPI().Unmarshal(natsMsg.Data, msg)
 	if decodeErr != nil {
@@ -427,6 +429,7 @@ func (bus *natsEventbus) subNatsReply(natsMsg *nats.Msg) {
 		return
 	}
 	reply, ok := reply0.(*requestMessage)
+
 	if !ok {
 		return
 	}
@@ -486,6 +489,7 @@ func (bus *natsEventbus) subNatsRequest(registration Registration) (err error) {
 			}
 			return
 		}
+
 		replyCh := make(chan *message, 1)
 		rm := &requestMessage{
 			message: msg,
@@ -499,7 +503,8 @@ func (bus *natsEventbus) subNatsRequest(registration Registration) (err error) {
 
 		result := <-replyCh
 		if result != nil {
-			result.putReplyAddress(reply)
+			replyId, _ := msg.getReplyAddress()
+			result.putReplyAddress(replyId)
 			_ = natsMsg.Respond(result.toJson())
 		}
 

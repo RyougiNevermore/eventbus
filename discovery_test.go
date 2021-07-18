@@ -3,8 +3,8 @@ package eventbus_test
 import (
 	"fmt"
 	"github.com/aacfactory/eventbus"
+	"github.com/rs/xid"
 	"sync"
-	"time"
 )
 
 type TestRegistration struct {
@@ -95,7 +95,7 @@ func (d *TestDiscovery) Publish(group string, name string, protocol string, addr
 	registration = TestRegistration{
 		NodeId_:   fmt.Sprintf("%s:%s", group, name),
 		NodeName_: fmt.Sprintf("%s:%s", group, name),
-		Id_:       time.Now().String(),
+		Id_:       xid.New().String(),
 		Group_:    group,
 		Name_:     name,
 		Status_:   eventbus.EndpointStatusRunning,

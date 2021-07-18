@@ -116,5 +116,23 @@ if err != nil {
 ```
 ### NATS 模型
 ```go
-// todo
+// options
+options := eventbus.NatsEventbusOption{
+        Name:                 "A", // nats 的 client 名称
+        Servers:              []string{"nats://120.55.167.188:14222"},
+        Username:             "ruser",
+        Password:             "T0pS3cr3t",
+        MaxReconnects:        10,
+        ReconnectWaitSecond:  3,
+        RetryOnFailedConnect: true,
+        EventChanCap:         64,
+}
+// discovery
+discovery := Foo{}
+// 创建
+bus, err = eventbus.NewNatsEventbus(discovery, options)
+if err != nil {
+    return
+}
+// 操作与本地Eventbus一样
 ```
