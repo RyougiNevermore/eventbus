@@ -172,7 +172,7 @@ func (msg *requestMessage) succeed(v interface{}) {
 	close(msg.replyCh)
 }
 
-func (msg *requestMessage) succeedMessage(v *message) {
+func (msg *requestMessage) sendMessage(v *message) {
 	if msg.replyCh == nil {
 		return
 	}

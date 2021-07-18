@@ -142,7 +142,7 @@ func (client *grpcEventbusClient) Request(requestMsg *requestMessage) {
 		return
 	}
 
-	requestMsg.succeedMessage(replyMsg)
+	requestMsg.sendMessage(replyMsg)
 
 	return
 }

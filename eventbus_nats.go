@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/aacfactory/errors"
+	"github.com/aacfactory/workers"
 	"github.com/dgraph-io/ristretto"
 	"github.com/nats-io/nats.go"
 	"github.com/rs/xid"
@@ -14,18 +15,21 @@ import (
 )
 
 type NatsEventbusOption struct {
-	Name                 string        `json:"name,omitempty"`
-	Servers              []string      `json:"servers,omitempty"`
-	Username             string        `json:"username,omitempty"`
-	Password             string        `json:"password,omitempty"`
-	MaxReconnects        int           `json:"maxReconnects,omitempty"`
-	ReconnectWaitSecond  int           `json:"reconnectWaitSecond,omitempty"`
-	RetryOnFailedConnect bool          `json:"retryOnFailedConnect,omitempty"`
-	Meta                 *EndpointMeta `json:"meta,omitempty"`
-	Tags                 []string      `json:"tags,omitempty"`
-	TLS                  *EndpointTLS  `json:"tls,omitempty"`
-	EventChanCap         int           `json:"eventChanCap,omitempty"`
-	EventWorkers         int           `json:"eventWorkers,omitempty"`
+	Name                     string        `json:"name,omitempty"`
+	Servers                  []string      `json:"servers,omitempty"`
+	Username                 string        `json:"username,omitempty"`
+	Password                 string        `json:"password,omitempty"`
+	MaxReconnects            int           `json:"maxReconnects,omitempty"`
+	ReconnectWaitSecond      int           `json:"reconnectWaitSecond,omitempty"`
+	RetryOnFailedConnect     bool          `json:"retryOnFailedConnect,omitempty"`
+	Meta                     *EndpointMeta `json:"meta,omitempty"`
+	Tags                     []string      `json:"tags,omitempty"`
+	TLS                      *EndpointTLS  `json:"tls,omitempty"`
+	EventChanCap             int           `json:"eventChanCap,omitempty"`
+	WorkersMaxIdleTime       time.Duration `json:"workersMaxIdleTime,omitempty"`
+	WorkersCommandTimeout    time.Duration `json:"workersCommandTimeout,omitempty"`
+	WorkersCommandBufferSize int           `json:"workersCommandBufferSize,omitempty"`
+	Workers                  int           `json:"workers,omitempty"`
 }
 
 func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus Eventbus, err error) {
@@ -37,10 +41,6 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 	eventChanCap := option.EventChanCap
 	if eventChanCap < 1 {
 		eventChanCap = getDefaultEventChanCap()
-	}
-	eventWorkers := option.EventWorkers
-	if eventWorkers < 1 {
-		eventWorkers = getDefaultWorkers()
 	}
 
 	servers := option.Servers
@@ -93,18 +93,35 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 	}
 
 	eb := &natsEventbus{
-		running:        0,
-		requestWorkers: nil,
-		discovery:      discovery,
-		conn:           nc,
-		handlersLock:   new(sync.Mutex),
-		handlers:       make(map[string]EventHandler),
-		handleCount:    new(sync.WaitGroup),
-		registrations:  make([]Registration, 0, 1),
-		replySubject:   replySubject,
+		running:               0,
+		requestWorkers:        nil,
+		discovery:             discovery,
+		conn:                  nc,
+		handlers:              newLocalEventHandleStore(),
+		registrationsLock:     sync.Mutex{},
+		registrations:         make([]Registration, 0, 1),
+		replySubject:          replySubject,
+		replies:               nil,
+		replySubscription:     nil,
+		addrSubscriptionsLock: sync.Mutex{},
+		addrSubscriptions:     make([]*nats.Subscription, 0, 1),
 	}
 
-	replySub, replySubErr := nc.Subscribe(replySubject, eb.handleReplyRequestMessage)
+	cache, newCacheErr := ristretto.NewCache(&ristretto.Config{
+		NumCounters: defaultGrpcClientCacheNumCounters,
+		MaxCost:     defaultGrpcClientCacheMaxCost,
+		BufferItems: 64,
+		OnEvict:     eb.onEvictConn,
+	})
+
+	if newCacheErr != nil {
+		err = fmt.Errorf("eventbus new cluster client cache failed, %v", newCacheErr)
+		return
+	}
+
+	eb.replies = cache
+
+	replySub, replySubErr := nc.Subscribe(replySubject, eb.subNatsReply)
 	if replySubErr != nil {
 		err = fmt.Errorf("create cluster eventbus failed, create reply subscription failed, %v", replySubErr)
 		return
@@ -112,12 +129,15 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 	eb.replySubscription = replySub
 
 	// workers
-	wp := &workerPool{
-		WorkerFunc:      eb.handleRequestMessage,
-		MaxWorkersCount: eventWorkers,
-	}
+	rw := workers.NewWorkers(workers.Option{
+		MaxWorkerNum:      option.Workers,
+		MaxIdleTime:       option.WorkersMaxIdleTime,
+		CommandTimeout:    option.WorkersCommandTimeout,
+		CommandBufferSize: option.WorkersCommandBufferSize,
+		Fn:                eb.handleRequestMessageWorkFn,
+	})
 
-	eb.requestWorkers = wp
+	eb.requestWorkers = rw
 
 	bus = eb
 
@@ -125,17 +145,26 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 }
 
 type natsEventbus struct {
-	running           int64
-	requestWorkers    *workerPool
-	discovery         ServiceDiscovery
-	conn              *nats.Conn
-	handlersLock      *sync.Mutex
-	handlers          map[string]EventHandler
-	handleCount       *sync.WaitGroup
-	registrations     []Registration
-	replySubject      string
-	replies           *ristretto.Cache
-	replySubscription *nats.Subscription
+	running               int64
+	requestWorkers        *workers.Workers
+	discovery             ServiceDiscovery
+	conn                  *nats.Conn
+	handlers              *localEventHandleStore
+	registrationsLock     sync.Mutex
+	registrations         []Registration
+	replySubject          string
+	replies               *ristretto.Cache
+	replySubscription     *nats.Subscription
+	addrSubscriptionsLock sync.Mutex
+	addrSubscriptions     []*nats.Subscription
+}
+
+func (bus *natsEventbus) onEvictConn(item *ristretto.Item) {
+	rm, ok := item.Value.(*requestMessage)
+	if !ok || rm == nil {
+		return
+	}
+	rm.failed(errors.ServiceError("timeout"))
 }
 
 func (bus *natsEventbus) getRemoteSubject(address string, options []DeliveryOptions) (sub string, has bool, err error) {
@@ -148,7 +177,7 @@ func (bus *natsEventbus) getRemoteSubject(address string, options []DeliveryOpti
 	if !has0 {
 		return
 	}
-	sub = reg.Address()
+	sub = reg.Id()
 	if sub != "" {
 		has = true
 	}
@@ -168,18 +197,22 @@ func (bus *natsEventbus) Send(address string, v interface{}, options ...Delivery
 
 	msg := newMessage(address, v, options)
 
-	if existed := bus.addressExisted(address, options...); existed {
-		rm := &requestMessage{
-			message: msg,
-			replyCh: nil,
-		}
+	tags, _ := msg.getTags()
 
-		if !bus.requestWorkers.SendRequestMessage(rm) {
+	rm := &requestMessage{
+		message: msg,
+		replyCh: nil,
+	}
+
+	//local
+	if bus.handlers.contains(address, tags) {
+		if !bus.requestWorkers.Command(rm) {
 			err = errors.ServiceError("eventbus send failed, send to workers failed")
 			return
 		}
 		return
 	}
+
 	// remote
 	sub, has, getErr := bus.getRemoteSubject(address, options)
 	if getErr != nil {
@@ -212,61 +245,165 @@ func (bus *natsEventbus) Request(address string, v interface{}, options ...Deliv
 
 	msg := newMessage(address, v, options)
 
-	if existed := bus.addressExisted(address, options...); existed {
-		rm := &requestMessage{
-			message: msg,
-			replyCh: nil,
-		}
+	tags, _ := msg.getTags()
 
-		if !bus.requestWorkers.SendRequestMessage(rm) {
-			reply = newFailedFuture(fmt.Errorf("eventbus request failed, send to workers failed"))
+	replyCh := make(chan *message, 1)
+	rm := &requestMessage{
+		message: msg,
+		replyCh: replyCh,
+	}
+
+	reply = newFuture(replyCh)
+
+	// local
+	if bus.handlers.contains(address, tags) {
+		if !bus.requestWorkers.Command(rm) {
+			rm.failed(fmt.Errorf("eventbus send failed, send to workers failed"))
 			return
 		}
 		return
 	}
+
 	// remote
 	sub, has, getErr := bus.getRemoteSubject(address, options)
 	if getErr != nil {
-		reply = newFailedFuture(getErr)
+		rm.failed(getErr)
 		return
 	}
 	if !has {
-		reply = newFailedFuture(errors.NotFoundError(fmt.Sprintf("eventbus request failed, %s is not found", address)))
+		rm.failed(errors.NotFoundError(fmt.Sprintf("eventbus request failed, %s is not found", address)))
 		return
 	}
 
 	replyId := xid.New().String()
-	replyCh := make(chan *message, 1)
-	reply = newFuture(replyCh)
 	bus.replies.Set(replyId, reply, 1)
+	bus.replies.Wait()
 	msg.putReplyAddress(replyId)
 
 	pubErr := bus.conn.PublishRequest(sub, bus.replySubject, msg.toJson())
 
 	if pubErr != nil {
 		bus.replies.Del(replyId)
-		replyCh <- failedReplyMessage(fmt.Errorf("eventbus send failed, nats publish failed, %v", pubErr))
-		close(replyCh)
+		bus.replies.Wait()
+		rm.failed(fmt.Errorf("eventbus send failed, nats publish failed, %v", pubErr))
 		return
 	}
-
 
 	return
 }
 
 func (bus *natsEventbus) RegisterHandler(address string, handler EventHandler, tags ...string) (err error) {
+	bus.registrationsLock.Lock()
+	defer bus.registrationsLock.Unlock()
+
+	err = bus.RegisterLocalHandler(address, handler, tags...)
+
+	if err != nil {
+		return
+	}
+
+	tags = tagsClean(tags)
+
+	registration, publishErr := bus.discovery.Publish(defaultGroupName, address, "nats", address, tags, nil, nil)
+
+	if publishErr != nil {
+		bus.handlers.remove(address, tags)
+		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, publishErr)
+		return
+	}
+
+	err = bus.subNatsRequest(registration)
+	if err != nil {
+		bus.handlers.remove(address, tags)
+		_ = bus.discovery.UnPublish(registration)
+		err = fmt.Errorf("eventbus register event handler failed for publush into discovery, address is %s, %v", address, publishErr)
+		return
+	}
+
+	bus.registrations = append(bus.registrations, registration)
+
 	return
 }
 
 func (bus *natsEventbus) RegisterLocalHandler(address string, handler EventHandler, tags ...string) (err error) {
+	if !bus.closed() {
+		err = fmt.Errorf("eventbus register handler failed, it is running")
+		return
+	}
+
+	if address == "" {
+		err = errors.ServiceError("eventbus register event handler failed, address is empty")
+		return
+	}
+	if strings.Contains(address, ":") {
+		err = errors.ServiceError("eventbus register event handler failed, address can not has : ")
+		return
+	}
+	if handler == nil {
+		err = errors.ServiceError("eventbus register event handler failed, handler is nil")
+		return
+	}
+
+	tags = tagsClean(tags)
+
+	has := bus.handlers.contains(address, tags)
+	if has {
+		err = errors.ServiceError("eventbus register event handler failed, address event handler has been bound")
+		return
+	}
+
+	bus.handlers.put(address, tags, handler)
+
 	return
 }
 
 func (bus *natsEventbus) Start(context context.Context) {
+	if !bus.closed() {
+		panic(fmt.Errorf("eventbus start failed, it is running"))
+	}
+	atomic.StoreInt64(&bus.running, int64(1))
+
+	// workers
+	bus.requestWorkers.Start()
 	return
 }
 
 func (bus *natsEventbus) Close(context context.Context) {
+	if bus.closed() {
+		panic(fmt.Errorf("eventbus has been closed, close falied"))
+	}
+	if !atomic.CompareAndSwapInt64(&bus.running, int64(1), int64(0)) {
+		panic(fmt.Errorf("eventbus is not running, close failed"))
+	}
+
+	for _, registration := range bus.registrations {
+		_ = bus.discovery.UnPublish(registration)
+	}
+
+	bus.requestWorkers.Stop()
+
+	_ = bus.replySubscription.Unsubscribe()
+	for _, subscription := range bus.addrSubscriptions {
+		_ = subscription.Unsubscribe()
+	}
+
+	closeCh := make(chan struct{}, 1)
+
+	go func(closeCh chan struct{}, eb *natsEventbus) {
+
+		eb.requestWorkers.Sync()
+
+		closeCh <- struct{}{}
+		close(closeCh)
+	}(closeCh, bus)
+
+	select {
+	case <-context.Done():
+		return
+	case <-closeCh:
+		return
+	default:
+	}
 	return
 }
 
@@ -274,43 +411,106 @@ func (bus *natsEventbus) closed() bool {
 	return atomic.LoadInt64(&bus.running) == int64(0)
 }
 
-func (bus *natsEventbus) addressExisted(address string, options ...DeliveryOptions) (has bool) {
-	tags := tagsFromDeliveryOptions(options...)
-	key := tagsAddress(address, tags)
-	_, has = bus.handlers[key]
+func (bus *natsEventbus) subNatsReply(natsMsg *nats.Msg) {
+
+	msg := &message{}
+	decodeErr := jsonAPI().Unmarshal(natsMsg.Data, msg)
+	if decodeErr != nil {
+		return
+	}
+	replyId, has := msg.getReplyAddress()
+	if !has {
+		return
+	}
+	reply0, hasReply := bus.replies.Get(replyId)
+	if !hasReply {
+		return
+	}
+	reply, ok := reply0.(*requestMessage)
+	if !ok {
+		return
+	}
+	if reply.needReply() {
+		reply.sendMessage(msg)
+	}
+	bus.replies.Del(replyId)
+	bus.replies.Wait()
 	return
 }
 
-func (bus *natsEventbus) handleRequestMessage(requestMsg *requestMessage) (err error) {
-	bus.handleCount.Add(1)
-	defer bus.handleCount.Done()
+func (bus *natsEventbus) handleRequestMessageWorkFn(v interface{}, meta map[string]string) {
+	if v == nil {
+		return
+	}
+	requestMsg, ok := v.(*requestMessage)
+	if !ok {
+		return
+	}
 
 	msg := requestMsg.message
 	address, has := msg.getAddress()
 	if !has || address == "" {
-		err = fmt.Errorf("eventbus handle event failed, address is empty, %v", msg)
+		requestMsg.failed(fmt.Errorf("eventbus handle event failed, address is empty, %v", msg))
 		return
 	}
 	tags, _ := msg.getTags()
-	key := tagsAddress(address, tags)
-	handler, existed := bus.handlers[key]
-	replyCh := requestMsg.replyCh
+	handler, existed := bus.handlers.get(address, tags)
 	if !existed {
-		err = errors.NotFoundError(fmt.Sprintf("eventbus handle event failed, event handler for address[%s] is not bound", address))
+		requestMsg.failed(fmt.Errorf("eventbus handle event failed, no handler handle address %s", address))
 		return
 	}
 	reply, handleErr := handler(&defaultEvent{head: defaultEventHead{msg.Head}, body: msg.Body})
 	if handleErr != nil {
-		err = handleErr
+		requestMsg.failed(handleErr)
 		return
 	}
-	replyCh <- succeedReplyMessage(reply)
-	close(replyCh)
-	bus.handleCount.Done()
-
+	requestMsg.succeed(reply)
 	return
 }
 
-func (bus *natsEventbus) handleReplyRequestMessage(msg *nats.Msg) {
+func (bus *natsEventbus) subNatsRequest(registration Registration) (err error) {
+	bus.addrSubscriptionsLock.Lock()
+	defer bus.addrSubscriptionsLock.Unlock()
 
+	sub, subErr := bus.conn.Subscribe(registration.Id(), func(natsMsg *nats.Msg) {
+
+		_ = natsMsg.Ack()
+
+		reply := natsMsg.Reply
+		msg := &message{}
+		decodeErr := jsonAPI().Unmarshal(natsMsg.Data, msg)
+		if decodeErr != nil {
+			if reply != "" {
+				_ = natsMsg.Respond(failedReplyMessage(fmt.Errorf("decode message failed")).toJson())
+				return
+			}
+			return
+		}
+		replyCh := make(chan *message, 1)
+		rm := &requestMessage{
+			message: msg,
+			replyCh: replyCh,
+		}
+
+		if !bus.requestWorkers.Command(rm) {
+			rm.failed(fmt.Errorf("eventbus send failed, send to workers failed"))
+			return
+		}
+
+		result := <-replyCh
+		if result != nil {
+			result.putReplyAddress(reply)
+			_ = natsMsg.Respond(result.toJson())
+		}
+
+	})
+
+	if subErr != nil {
+		err = fmt.Errorf("eventbus sub failed, %v", subErr)
+		return
+	}
+
+	bus.addrSubscriptions = append(bus.addrSubscriptions, sub)
+
+	return
 }

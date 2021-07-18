@@ -8,6 +8,7 @@ import (
 	"github.com/aacfactory/workers"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -48,6 +49,7 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 		registrationAddress: "",
 		meta:                option.Meta,
 		endpointTLS:         option.TLS,
+		registrationsLock:   sync.Mutex{},
 		registrations:       make([]Registration, 0, 1),
 	}
 
@@ -139,6 +141,7 @@ type clusterEventBus struct {
 	registrationAddress string
 	meta                *EndpointMeta
 	endpointTLS         *EndpointTLS
+	registrationsLock   sync.Mutex
 	registrations       []Registration
 }
 
@@ -222,6 +225,8 @@ func (bus *clusterEventBus) Request(address string, v interface{}, options ...De
 }
 
 func (bus *clusterEventBus) RegisterHandler(address string, handler EventHandler, tags ...string) (err error) {
+	bus.registrationsLock.Lock()
+	defer bus.registrationsLock.Unlock()
 
 	err = bus.RegisterLocalHandler(address, handler, tags...)
 
