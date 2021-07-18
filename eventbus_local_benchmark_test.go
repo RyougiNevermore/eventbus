@@ -33,7 +33,8 @@ func BenchmarkNewEventbus(b *testing.B) {
 	iterations := int64(b.N)
 
 	//eb := eventbus.NewEventbusWithOption(eventbus.LocaledEventbusOption{
-	//	EventWorkers: 64,
+	//	Workers: 32,
+	//	WorkersCommandBufferSize: 0,
 	//})
 	eb := eventbus.NewEventbus()
 	_ = eb.RegisterHandler("void", HandlerVoidBenchmark, "tag1")

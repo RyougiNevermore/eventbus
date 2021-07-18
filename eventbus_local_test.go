@@ -23,7 +23,7 @@ type Result struct {
 func HandlerReply(event eventbus.Event) (result interface{}, err error) {
 	arg := &Arg{}
 	_ = json.Unmarshal(event.Body(), arg)
-	fmt.Println("handle reply", event.Head(), arg)
+	fmt.Println("->", "handle reply", event.Head(), arg)
 	if arg.Num < 0 {
 		err = errors.InvalidArgumentErrorWithDetails("bad number", "num", "less than 0")
 		return
@@ -37,7 +37,7 @@ func HandlerReply(event eventbus.Event) (result interface{}, err error) {
 func HandlerVoid(event eventbus.Event) (result interface{}, err error) {
 	arg := &Arg{}
 	_ = json.Unmarshal(event.Body(), arg)
-	fmt.Println("handle void", event.Head(), arg)
+	fmt.Println("->", "handle void", event.Head(), arg)
 	return
 }
 
