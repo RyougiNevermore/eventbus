@@ -20,7 +20,6 @@ func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 	if eventChanCap < 1 {
 		eventChanCap = getDefaultEventChanCap()
 	}
-	eventWorkers := option.Workers
 
 	eb = &localedEventbus{
 		running:  int64(0),
@@ -28,7 +27,7 @@ func NewEventbusWithOption(option LocaledEventbusOption) (eb *localedEventbus) {
 	}
 
 	rw := workers.NewWorkers(workers.Option{
-		MaxWorkerNum:      eventWorkers,
+		MaxWorkerNum:      option.Workers,
 		MaxIdleTime:       option.WorkersMaxIdleTime,
 		CommandTimeout:    option.WorkersCommandTimeout,
 		CommandBufferSize: option.WorkersCommandBufferSize,
@@ -108,9 +107,9 @@ func (eb *localedEventbus) Request(address string, v interface{}, options ...Del
 	}
 
 	if !eb.requestWorkers.Command(rm) {
-		rm.replyCh <- failedReplyMessage(errors.ServiceError("eventbus send failed, send to workers failed"))
-		close(rm.replyCh)
+		rm.failed(errors.ServiceError("eventbus send failed, send to workers failed"))
 	}
+
 	return
 }
 
@@ -132,6 +131,8 @@ func (eb *localedEventbus) RegisterHandler(address string, handler EventHandler,
 		err = errors.ServiceError("eventbus register event handler failed, handler is nil")
 		return
 	}
+
+	tags = tagsClean(tags)
 
 	_, has := eb.handlers.get(address, tags)
 	if has {
@@ -172,6 +173,7 @@ func (eb *localedEventbus) Close(context context.Context) {
 	go func(closeCh chan struct{}, eb *localedEventbus) {
 		eb.requestWorkers.Sync()
 		closeCh <- struct{}{}
+		close(closeCh)
 	}(closeCh, eb)
 
 	select {

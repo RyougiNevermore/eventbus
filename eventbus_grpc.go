@@ -5,15 +5,15 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/aacfactory/eventbus/internal"
+	"github.com/aacfactory/workers"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
-func newGrpcEventbusServer(ln net.Listener, requestWorkers *workerPool, handleCount *sync.WaitGroup, tlsConfig *tls.Config) (srv *grpcEventBusServer) {
+func newGrpcEventbusServer(ln net.Listener, requestWorkers *workers.Workers, tlsConfig *tls.Config) (srv *grpcEventBusServer) {
 	var server *grpc.Server
 	if tlsConfig != nil {
 		server = grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
@@ -25,7 +25,6 @@ func newGrpcEventbusServer(ln net.Listener, requestWorkers *workerPool, handleCo
 		requestWorkers: requestWorkers,
 		server:         server,
 		ln:             ln,
-		handleCount:    handleCount,
 		tlsConfig:      tlsConfig,
 	}
 	internal.RegisterEventbusServer(server, srv)
@@ -35,10 +34,9 @@ func newGrpcEventbusServer(ln net.Listener, requestWorkers *workerPool, handleCo
 type grpcEventBusServer struct {
 	internal.UnimplementedEventbusServer
 	running        int64
-	requestWorkers *workerPool
+	requestWorkers *workers.Workers
 	server         *grpc.Server
 	ln             net.Listener
-	handleCount    *sync.WaitGroup
 	tlsConfig      *tls.Config
 }
 
@@ -58,14 +56,12 @@ func (srv *grpcEventBusServer) Send(_ context.Context, remoteMessage *internal.M
 		return
 	}
 
-	srv.handleCount.Add(1)
-
 	rm := &requestMessage{
 		message: msg,
 		replyCh: nil,
 	}
 
-	if !srv.requestWorkers.SendRequestMessage(rm) {
+	if !srv.requestWorkers.Command(rm, "type", "local") {
 		err = fmt.Errorf("eventbus send failed, send to workers failed")
 		return
 	}
@@ -92,14 +88,12 @@ func (srv *grpcEventBusServer) Request(_ context.Context, remoteMessage *interna
 	}
 	replyCh := make(chan *message, 1)
 
-	srv.handleCount.Add(1)
-
 	rm := &requestMessage{
 		message: msg,
 		replyCh: replyCh,
 	}
 
-	if !srv.requestWorkers.SendRequestMessage(rm) {
+	if !srv.requestWorkers.Command(rm, "type", "local") {
 		err = fmt.Errorf("eventbus send failed, send to workers failed")
 		return
 	}
@@ -117,6 +111,7 @@ func (srv *grpcEventBusServer) Request(_ context.Context, remoteMessage *interna
 		Header: jsonEncode(reply.Head),
 		Body:   reply.Body,
 	}
+
 	return
 }
 

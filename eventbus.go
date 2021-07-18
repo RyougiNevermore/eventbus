@@ -144,9 +144,12 @@ func (s *localEventHandleStore) get(addr string, tags []string) (handle EventHan
 
 	for _, stored := range handles {
 		if tags == nil || len(tags) == 0 {
-			handle = stored.handle
-			has = true
-			return
+			if len(stored.tags) == 0 {
+				handle = stored.handle
+				has = true
+				return
+			}
+			continue
 		}
 		mapped := 0
 		for _, tag := range tags {
@@ -164,4 +167,36 @@ func (s *localEventHandleStore) get(addr string, tags []string) (handle EventHan
 		}
 	}
 	return
+}
+
+func (s *localEventHandleStore) remove(addr string, tags []string) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	handles, has := s.handlerMap[addr]
+	if !has {
+		return
+	}
+	if tags == nil {
+		tags = make([]string, 0, 1)
+	}
+	newHandles := make([]eventHandleUnit, 0, 1)
+	for _, stored := range handles {
+		mapped := 0
+		for _, st := range stored.tags {
+			for _, tag := range tags {
+				if tag == st {
+					mapped++
+					break
+				}
+			}
+		}
+		if mapped != len(tags) {
+			newHandles = append(newHandles, stored)
+		}
+	}
+	if len(newHandles) == 0 {
+		delete(s.handlerMap, addr)
+	} else {
+		s.handlerMap[addr] = newHandles
+	}
 }

@@ -51,7 +51,7 @@ func TestNewClusterEventbus(t *testing.T) {
 		t.Error("c1 send", err)
 	}
 	// c1 request good
-	reply = c1.Request("request", &Arg{
+	reply = c1.Request("b.request", &Arg{
 		Id:       "id",
 		Num:      1,
 		Datetime: time.Now(),
@@ -68,6 +68,7 @@ func TestNewClusterEventbus(t *testing.T) {
 		Num:      1,
 		Datetime: time.Now(),
 	})
+
 	if err != nil {
 		t.Log("c2 local bad", err)
 	}
@@ -81,7 +82,7 @@ func TestNewClusterEventbus(t *testing.T) {
 		t.Error("c1 send", err)
 	}
 	// c1 request good
-	reply = c2.Request("request", &Arg{
+	reply = c2.Request("b.request", &Arg{
 		Id:       "id",
 		Num:      1,
 		Datetime: time.Now(),
@@ -92,21 +93,19 @@ func TestNewClusterEventbus(t *testing.T) {
 	}
 	fmt.Println("c2 request result", result)
 
-	time.Sleep(3 * time.Second)
-
 }
 
 func createEventbusA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	options := eventbus.ClusterEventbusOption{
-		Host:                       "0.0.0.0",
-		Port:                       9090,
-		PublicHost:                 "127.0.0.1",
-		PublicPort:                 0,
-		Meta:                       &eventbus.EndpointMeta{},
-		Tags:                       nil,
-		TLS:                        &eventbus.EndpointTLS{},
-		EventChanCap:               64,
+		Host:         "0.0.0.0",
+		Port:         9090,
+		PublicHost:   "127.0.0.1",
+		PublicPort:   0,
+		Meta:         &eventbus.EndpointMeta{},
+		Tags:         nil,
+		TLS:          &eventbus.EndpointTLS{},
+		EventChanCap: 64,
 	}
 
 	bus, err = eventbus.NewClusterEventbus(discovery, options)
@@ -131,14 +130,14 @@ func createEventbusA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 func createEventbusB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	options := eventbus.ClusterEventbusOption{
-		Host:                       "0.0.0.0",
-		Port:                       9191,
-		PublicHost:                 "127.0.0.1",
-		PublicPort:                 0,
-		Meta:                       &eventbus.EndpointMeta{},
-		Tags:                       nil,
-		TLS:                        &eventbus.EndpointTLS{},
-		EventChanCap:               64,
+		Host:         "0.0.0.0",
+		Port:         9191,
+		PublicHost:   "127.0.0.1",
+		PublicPort:   0,
+		Meta:         &eventbus.EndpointMeta{},
+		Tags:         nil,
+		TLS:          &eventbus.EndpointTLS{},
+		EventChanCap: 64,
 	}
 
 	bus, err = eventbus.NewClusterEventbus(discovery, options)
@@ -146,11 +145,11 @@ func createEventbusB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 		return
 	}
 
-	err = bus.RegisterHandler("send", HandleSend)
+	err = bus.RegisterHandler("b.send", HandleSend)
 	if err != nil {
 		return
 	}
-	err = bus.RegisterHandler("request", HandleRequest)
+	err = bus.RegisterHandler("b.request", HandleRequest)
 	if err != nil {
 		return
 	}

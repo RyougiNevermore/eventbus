@@ -91,25 +91,28 @@ func (client *grpcEventbusClient) Send(msg *message) (err error) {
 	return
 }
 
-func (client *grpcEventbusClient) Request(msg *message) (replyMsg *message) {
+func (client *grpcEventbusClient) Request(requestMsg *requestMessage) {
 	if client.closed() {
-		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, client is closed"))
+		requestMsg.failed(fmt.Errorf("eventbus request failed, client is closed"))
 		return
 	}
+
+	msg := requestMsg.message
+
 	address, hasAddress := msg.getAddress()
 	if !hasAddress {
-		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, address is empty"))
+		requestMsg.failed(fmt.Errorf("eventbus request failed, address is empty"))
 		return
 	}
 	tags, _ := msg.getTags()
 
 	conn, has, getErr := client.getConn(address, tags)
 	if getErr != nil {
-		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, get address handler failed, %v", getErr))
+		requestMsg.failed(fmt.Errorf("eventbus request failed, get address handler failed, %v", getErr))
 		return
 	}
 	if !has {
-		replyMsg = failedReplyMessage(errors.NotFoundError(fmt.Sprintf("eventbus request failed, handler of address[%s] is not found", address)))
+		requestMsg.failed(errors.NotFoundError(fmt.Sprintf("eventbus request failed, handler of address[%s] is not found", address)))
 		return
 	}
 	grpcClient := internal.NewEventbusClient(conn)
@@ -120,22 +123,26 @@ func (client *grpcEventbusClient) Request(msg *message) (replyMsg *message) {
 	if msg.Body != nil && len(msg.Body) > 0 {
 		remoteMsg.Body = msg.Body
 	}
+
 	result, requestErr := grpcClient.Request(context.TODO(), remoteMsg)
+
 	if requestErr != nil {
-		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, %v", requestErr))
+		requestMsg.failed(requestErr)
 		return
 	}
 
 	if result == nil {
-		replyMsg = &message{}
+		requestMsg.succeed(struct{}{})
 		return
 	}
-	replyMsg0, replyMsgErr := newMessageFromBytes(result.Header, result.Body)
+
+	replyMsg, replyMsgErr := newMessageFromBytes(result.Header, result.Body)
 	if replyMsgErr != nil {
-		replyMsg = failedReplyMessage(fmt.Errorf("eventbus request failed, parse result failed, %v", replyMsgErr))
+		requestMsg.failed(fmt.Errorf("eventbus request failed, parse result failed, %v", replyMsgErr))
 		return
 	}
-	replyMsg = replyMsg0
+
+	requestMsg.succeedMessage(replyMsg)
 
 	return
 }
@@ -247,6 +254,7 @@ func (b *ebsResolverBuilder) Build(target resolver.Target, cc resolver.ClientCon
 
 	return r, nil
 }
+
 func (*ebsResolverBuilder) Scheme() string { return ebsGrpcSchema }
 
 type ebsResolver struct {

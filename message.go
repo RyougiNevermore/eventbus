@@ -6,6 +6,12 @@ import (
 	"github.com/aacfactory/errors"
 )
 
+func newMessageFromJson(b []byte) (msg *message) {
+	msg = &message{}
+	jsonDecode(b, msg)
+	return
+}
+
 func newMessage(address string, v interface{}, options []DeliveryOptions) (msg *message) {
 	if address == "" {
 		panic(fmt.Errorf("eventbus create message failed, address is empty"))
@@ -106,6 +112,14 @@ func (msg *message) getAddress() (string, bool) {
 	return msg.Head.Get(messageHeadAddress)
 }
 
+func (msg *message) putReplyAddress(address string) {
+	msg.Head.Put(messageHeadReplyAddress, []string{address})
+}
+
+func (msg *message) getReplyAddress() (string, bool) {
+	return msg.Head.Get(messageHeadReplyAddress)
+}
+
 func (msg *message) getTags() ([]string, bool) {
 	return msg.Head.Values("tag")
 }
@@ -113,6 +127,10 @@ func (msg *message) getTags() ([]string, bool) {
 func (msg *message) failed() (failed bool) {
 	_, failed = msg.Head.Get(messageHeadReplyError)
 	return
+}
+
+func (msg *message) toJson() []byte {
+	return jsonEncode(msg)
 }
 
 func (msg *message) cause() (err error) {
@@ -131,4 +149,33 @@ func (msg *message) cause() (err error) {
 type requestMessage struct {
 	message *message
 	replyCh chan<- *message
+}
+
+func (msg *requestMessage) needReply() (ok bool) {
+	ok = msg.replyCh != nil
+	return
+}
+
+func (msg *requestMessage) failed(err error) {
+	if msg.replyCh == nil {
+		return
+	}
+	msg.replyCh <- failedReplyMessage(err)
+	close(msg.replyCh)
+}
+
+func (msg *requestMessage) succeed(v interface{}) {
+	if msg.replyCh == nil {
+		return
+	}
+	msg.replyCh <- succeedReplyMessage(v)
+	close(msg.replyCh)
+}
+
+func (msg *requestMessage) succeedMessage(v *message) {
+	if msg.replyCh == nil {
+		return
+	}
+	msg.replyCh <- v
+	close(msg.replyCh)
 }
