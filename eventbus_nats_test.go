@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aacfactory/cluster"
 	"github.com/aacfactory/errors"
 	"github.com/aacfactory/eventbus"
 	"testing"
@@ -68,7 +69,7 @@ func TestNewNatsEventbus(t *testing.T) {
 	fmt.Println("c2 request", "a.request", result, err)
 }
 
-func createEventbusNatsA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
+func createEventbusNatsA(discovery cluster.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	bus, err = eventbus.NewNatsEventbus(discovery, eventbus.NatsEventbusOption{
 		Name:                 "A",
@@ -99,7 +100,7 @@ func createEventbusNatsA(discovery eventbus.ServiceDiscovery) (bus eventbus.Even
 	return
 }
 
-func createEventbusNatsB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
+func createEventbusNatsB(discovery cluster.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	bus, err = eventbus.NewNatsEventbus(discovery, eventbus.NatsEventbusOption{
 		Name:                 "B",

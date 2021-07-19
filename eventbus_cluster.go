@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/aacfactory/cluster"
 	"github.com/aacfactory/errors"
 	"github.com/aacfactory/workers"
 	"net"
@@ -14,21 +15,21 @@ import (
 )
 
 type ClusterEventbusOption struct {
-	Host                     string        `json:"host,omitempty"`
-	Port                     int           `json:"port,omitempty"`
-	PublicHost               string        `json:"publicHost,omitempty"`
-	PublicPort               int           `json:"publicPort,omitempty"`
-	Meta                     *EndpointMeta `json:"meta,omitempty"`
-	Tags                     []string      `json:"tags,omitempty"`
-	TLS                      *EndpointTLS  `json:"tls,omitempty"`
-	EventChanCap             int           `json:"eventChanCap,omitempty"`
-	WorkersMaxIdleTime       time.Duration `json:"workersMaxIdleTime,omitempty"`
-	WorkersCommandTimeout    time.Duration `json:"workersCommandTimeout,omitempty"`
-	WorkersCommandBufferSize int           `json:"workersCommandBufferSize,omitempty"`
-	Workers                  int           `json:"workers,omitempty"`
+	Host                     string              `json:"host,omitempty"`
+	Port                     int                 `json:"port,omitempty"`
+	PublicHost               string              `json:"publicHost,omitempty"`
+	PublicPort               int                 `json:"publicPort,omitempty"`
+	Meta                     cluster.ServiceMeta `json:"meta,omitempty"`
+	Tags                     []string            `json:"tags,omitempty"`
+	TLS                      cluster.ServiceTLS  `json:"tls,omitempty"`
+	EventChanCap             int                 `json:"eventChanCap,omitempty"`
+	WorkersMaxIdleTime       time.Duration       `json:"workersMaxIdleTime,omitempty"`
+	WorkersCommandTimeout    time.Duration       `json:"workersCommandTimeout,omitempty"`
+	WorkersCommandBufferSize int                 `json:"workersCommandBufferSize,omitempty"`
+	Workers                  int                 `json:"workers,omitempty"`
 }
 
-func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption) (bus Eventbus, err error) {
+func NewClusterEventbus(discovery cluster.ServiceDiscovery, option ClusterEventbusOption) (bus Eventbus, err error) {
 	if discovery == nil {
 		err = fmt.Errorf("create cluster eventbus failed, dicovery is nil")
 		return
@@ -50,7 +51,7 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 		meta:                option.Meta,
 		endpointTLS:         option.TLS,
 		registrationsLock:   sync.Mutex{},
-		registrations:       make([]Registration, 0, 1),
+		registrations:       make([]cluster.Registration, 0, 1),
 	}
 
 	host := option.Host
@@ -103,15 +104,11 @@ func NewClusterEventbus(discovery ServiceDiscovery, option ClusterEventbusOption
 	// grpcServer
 	var tlsConfig *tls.Config = nil
 	endpointTLS := clusterEventbus.endpointTLS
-	if endpointTLS != nil && endpointTLS.Enable() {
+	if endpointTLS.Enable() {
 		tlsConfig, err = endpointTLS.ToServerTLSConfig()
 		if err != nil {
 			err = fmt.Errorf("create cluster eventbus failed, create server tls config failed, %v", err)
 			return
-		}
-	} else {
-		clusterEventbus.endpointTLS = &EndpointTLS{
-			Enable_: false,
 		}
 	}
 
@@ -135,14 +132,14 @@ type clusterEventBus struct {
 	requestWorkers      *workers.Workers
 	ln                  net.Listener
 	grpcServer          *grpcEventBusServer
-	discovery           ServiceDiscovery
+	discovery           cluster.ServiceDiscovery
 	clients             *grpcEventbusClient
 	handlers            *localEventHandleStore
 	registrationAddress string
-	meta                *EndpointMeta
-	endpointTLS         *EndpointTLS
+	meta                cluster.ServiceMeta
+	endpointTLS         cluster.ServiceTLS
 	registrationsLock   sync.Mutex
-	registrations       []Registration
+	registrations       []cluster.Registration
 }
 
 func (bus *clusterEventBus) Send(address string, v interface{}, options ...DeliveryOptions) (err error) {

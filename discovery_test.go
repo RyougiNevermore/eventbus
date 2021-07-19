@@ -2,23 +2,23 @@ package eventbus_test
 
 import (
 	"fmt"
-	"github.com/aacfactory/eventbus"
+	"github.com/aacfactory/cluster"
 	"github.com/rs/xid"
 	"sync"
 )
 
 type TestRegistration struct {
-	NodeId_   string                   `json:"nodeId,omitempty"`
-	NodeName_ string                   `json:"nodeName,omitempty"`
-	Id_       string                   `json:"id,omitempty"`
-	Group_    string                   `json:"group,omitempty"`
-	Name_     string                   `json:"name,omitempty"`
-	Status_   eventbus.Status          `json:"status,omitempty"`
-	Protocol_ string                   `json:"protocol,omitempty"`
-	Address_  string                   `json:"address,omitempty"`
-	Tags_     []string                 `json:"tags,omitempty"`
-	Meta_     eventbus.Meta            `json:"meta,omitempty"`
-	TLS_      eventbus.RegistrationTLS `json:"tls,omitempty"`
+	NodeId_   string                  `json:"nodeId,omitempty"`
+	NodeName_ string                  `json:"nodeName,omitempty"`
+	Id_       string                  `json:"id,omitempty"`
+	Group_    string                  `json:"group,omitempty"`
+	Name_     string                  `json:"name,omitempty"`
+	Status_   cluster.ServiceStatus   `json:"status,omitempty"`
+	Protocol_ string                  `json:"protocol,omitempty"`
+	Address_  string                  `json:"address,omitempty"`
+	Tags_     []string                `json:"tags,omitempty"`
+	Meta_     cluster.Meta            `json:"meta,omitempty"`
+	TLS_      cluster.RegistrationTLS `json:"tls,omitempty"`
 }
 
 func (s TestRegistration) NodeId() (nodeId string) {
@@ -46,7 +46,7 @@ func (s TestRegistration) Name() (name string) {
 	return
 }
 
-func (s TestRegistration) Status() (status eventbus.Status) {
+func (s TestRegistration) Status() (status cluster.Status) {
 	status = s.Status_
 	return
 }
@@ -66,29 +66,29 @@ func (s TestRegistration) Tags() (tags []string) {
 	return
 }
 
-func (s TestRegistration) Meta() (meta eventbus.Meta) {
+func (s TestRegistration) Meta() (meta cluster.Meta) {
 	meta = s.Meta_
 	return
 }
 
-func (s TestRegistration) TLS() (registrationTLS eventbus.RegistrationTLS) {
+func (s TestRegistration) TLS() (registrationTLS cluster.RegistrationTLS) {
 	return s.TLS_
 }
 
-func NewTestDiscovery() eventbus.ServiceDiscovery {
+func NewTestDiscovery() cluster.ServiceDiscovery {
 
 	return &TestDiscovery{
 		lock:            new(sync.Mutex),
-		registrationMap: make(map[string]eventbus.Registration),
+		registrationMap: make(map[string]cluster.Registration),
 	}
 }
 
 type TestDiscovery struct {
 	lock            *sync.Mutex
-	registrationMap map[string]eventbus.Registration
+	registrationMap map[string]cluster.Registration
 }
 
-func (d *TestDiscovery) Publish(group string, name string, protocol string, address string, tags []string, meta eventbus.Meta, registrationTLS eventbus.RegistrationTLS) (registration eventbus.Registration, err error) {
+func (d *TestDiscovery) Publish(group string, name string, protocol string, address string, tags []string, meta cluster.Meta, registrationTLS cluster.RegistrationTLS) (registration cluster.Registration, err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -98,7 +98,7 @@ func (d *TestDiscovery) Publish(group string, name string, protocol string, addr
 		Id_:       xid.New().String(),
 		Group_:    group,
 		Name_:     name,
-		Status_:   eventbus.EndpointStatusRunning,
+		Status_:   cluster.ServiceStatusRunning,
 		Protocol_: protocol,
 		Address_:  address,
 		Tags_:     tags,
@@ -111,7 +111,7 @@ func (d *TestDiscovery) Publish(group string, name string, protocol string, addr
 	return
 }
 
-func (d *TestDiscovery) UnPublish(registration eventbus.Registration) (err error) {
+func (d *TestDiscovery) UnPublish(registration cluster.Registration) (err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -120,7 +120,7 @@ func (d *TestDiscovery) UnPublish(registration eventbus.Registration) (err error
 	return
 }
 
-func (d *TestDiscovery) Get(group string, name string, tags ...string) (registration eventbus.Registration, has bool, err error) {
+func (d *TestDiscovery) Get(group string, name string, tags ...string) (registration cluster.Registration, has bool, err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
@@ -153,11 +153,11 @@ func (d *TestDiscovery) Get(group string, name string, tags ...string) (registra
 	return
 }
 
-func (d *TestDiscovery) GetALL(group string, name string, tags ...string) (registrations []eventbus.Registration, has bool, err error) {
+func (d *TestDiscovery) GetALL(group string, name string, tags ...string) (registrations []cluster.Registration, has bool, err error) {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	registrations = make([]eventbus.Registration, 0, 1)
+	registrations = make([]cluster.Registration, 0, 1)
 	for _, stored := range d.registrationMap {
 		if stored.Group() == group && stored.Name() == name {
 			if tags == nil || len(tags) == 0 {

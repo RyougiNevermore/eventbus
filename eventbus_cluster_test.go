@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/aacfactory/cluster"
 	"github.com/aacfactory/errors"
 	"github.com/aacfactory/eventbus"
 	"testing"
@@ -95,16 +96,16 @@ func TestNewClusterEventbus(t *testing.T) {
 
 }
 
-func createEventbusA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
+func createEventbusA(discovery cluster.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	options := eventbus.ClusterEventbusOption{
 		Host:         "0.0.0.0",
 		Port:         9090,
 		PublicHost:   "127.0.0.1",
 		PublicPort:   0,
-		Meta:         &eventbus.EndpointMeta{},
+		Meta:         cluster.ServiceMeta{},
 		Tags:         nil,
-		TLS:          &eventbus.EndpointTLS{},
+		TLS:          cluster.ServiceTLS{},
 		EventChanCap: 64,
 	}
 
@@ -127,16 +128,16 @@ func createEventbusA(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus
 	return
 }
 
-func createEventbusB(discovery eventbus.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
+func createEventbusB(discovery cluster.ServiceDiscovery) (bus eventbus.Eventbus, err error) {
 
 	options := eventbus.ClusterEventbusOption{
 		Host:         "0.0.0.0",
 		Port:         9191,
 		PublicHost:   "127.0.0.1",
 		PublicPort:   0,
-		Meta:         &eventbus.EndpointMeta{},
+		Meta:         cluster.ServiceMeta{},
 		Tags:         nil,
-		TLS:          &eventbus.EndpointTLS{},
+		TLS:          cluster.ServiceTLS{},
 		EventChanCap: 64,
 	}
 

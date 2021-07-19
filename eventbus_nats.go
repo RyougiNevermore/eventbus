@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"fmt"
+	"github.com/aacfactory/cluster"
 	"github.com/aacfactory/errors"
 	"github.com/aacfactory/workers"
 	"github.com/dgraph-io/ristretto"
@@ -22,9 +23,9 @@ type NatsEventbusOption struct {
 	MaxReconnects            int           `json:"maxReconnects,omitempty"`
 	ReconnectWaitSecond      int           `json:"reconnectWaitSecond,omitempty"`
 	RetryOnFailedConnect     bool          `json:"retryOnFailedConnect,omitempty"`
-	Meta                     *EndpointMeta `json:"meta,omitempty"`
+	Meta                     cluster.ServiceMeta `json:"meta,omitempty"`
 	Tags                     []string      `json:"tags,omitempty"`
-	TLS                      *EndpointTLS  `json:"tls,omitempty"`
+	TLS                      cluster.ServiceTLS  `json:"tls,omitempty"`
 	EventChanCap             int           `json:"eventChanCap,omitempty"`
 	WorkersMaxIdleTime       time.Duration `json:"workersMaxIdleTime,omitempty"`
 	WorkersCommandTimeout    time.Duration `json:"workersCommandTimeout,omitempty"`
@@ -32,7 +33,7 @@ type NatsEventbusOption struct {
 	Workers                  int           `json:"workers,omitempty"`
 }
 
-func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus Eventbus, err error) {
+func NewNatsEventbus(discovery cluster.ServiceDiscovery, option NatsEventbusOption) (bus Eventbus, err error) {
 	if discovery == nil {
 		err = fmt.Errorf("create cluster eventbus failed, dicovery is nil")
 		return
@@ -78,7 +79,7 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 		opts = append(opts, nats.RetryOnFailedConnect(true))
 	}
 
-	if option.TLS != nil {
+	if option.TLS.Enable() {
 		tlsConfig, tlsConfigErr := option.TLS.ToClientTLSConfig()
 		if tlsConfigErr != nil {
 			err = fmt.Errorf("create cluster eventbus failed, make nats tlc config failed, %v", tlsConfigErr)
@@ -99,7 +100,7 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 		conn:                  nc,
 		handlers:              newLocalEventHandleStore(),
 		registrationsLock:     sync.Mutex{},
-		registrations:         make([]Registration, 0, 1),
+		registrations:         make([]cluster.Registration, 0, 1),
 		replySubject:          replySubject,
 		replies:               nil,
 		replySubscription:     nil,
@@ -147,11 +148,11 @@ func NewNatsEventbus(discovery ServiceDiscovery, option NatsEventbusOption) (bus
 type natsEventbus struct {
 	running               int64
 	requestWorkers        *workers.Workers
-	discovery             ServiceDiscovery
+	discovery             cluster.ServiceDiscovery
 	conn                  *nats.Conn
 	handlers              *localEventHandleStore
 	registrationsLock     sync.Mutex
-	registrations         []Registration
+	registrations         []cluster.Registration
 	replySubject          string
 	replies               *ristretto.Cache
 	replySubscription     *nats.Subscription
@@ -471,7 +472,7 @@ func (bus *natsEventbus) handleRequestMessageWorkFn(v interface{}, meta map[stri
 	return
 }
 
-func (bus *natsEventbus) subNatsRequest(registration Registration) (err error) {
+func (bus *natsEventbus) subNatsRequest(registration cluster.Registration) (err error) {
 	bus.addrSubscriptionsLock.Lock()
 	defer bus.addrSubscriptionsLock.Unlock()
 

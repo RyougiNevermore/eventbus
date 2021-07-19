@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"fmt"
+	"github.com/aacfactory/cluster"
 	"github.com/aacfactory/errors"
 	"github.com/aacfactory/eventbus/internal"
 	"github.com/dgraph-io/ristretto"
@@ -18,7 +19,7 @@ const (
 	defaultGrpcClientCacheMaxCost     = 128 * (1 << 20)
 )
 
-func newGrpcEventbusClient(discovery ServiceDiscovery) (client *grpcEventbusClient, err error) {
+func newGrpcEventbusClient(discovery cluster.ServiceDiscovery) (client *grpcEventbusClient, err error) {
 
 	client = &grpcEventbusClient{
 		running:       0,
@@ -49,7 +50,7 @@ func newGrpcEventbusClient(discovery ServiceDiscovery) (client *grpcEventbusClie
 
 type grpcEventbusClient struct {
 	running       int64
-	discovery     ServiceDiscovery
+	discovery     cluster.ServiceDiscovery
 	connCachedMap *ristretto.Cache
 }
 
@@ -240,7 +241,7 @@ func (client *grpcEventbusClient) onEvictConn(item *ristretto.Item) {
 }
 
 type ebsResolverBuilder struct {
-	discovery ServiceDiscovery
+	discovery cluster.ServiceDiscovery
 }
 
 func (b *ebsResolverBuilder) Build(target resolver.Target, cc resolver.ClientConn, opts resolver.BuildOptions) (resolver.Resolver, error) {
@@ -260,7 +261,7 @@ func (*ebsResolverBuilder) Scheme() string { return ebsGrpcSchema }
 type ebsResolver struct {
 	target    resolver.Target
 	cc        resolver.ClientConn
-	discovery ServiceDiscovery
+	discovery cluster.ServiceDiscovery
 }
 
 func (r *ebsResolver) ResolveNow(o resolver.ResolveNowOptions) {
