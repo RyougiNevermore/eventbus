@@ -4,7 +4,7 @@ go 1.16
 
 require (
 	github.com/aacfactory/cluster v1.0.4
-	github.com/aacfactory/errors v1.2.0
+	github.com/aacfactory/errors v1.2.2
 	github.com/aacfactory/workers v1.0.0
 	github.com/dgraph-io/ristretto v0.1.0
 	github.com/json-iterator/go v1.1.11
